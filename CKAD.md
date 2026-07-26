@@ -2793,6 +2793,331 @@ A service mesh such as Istio allows routing traffic based on explicit percentage
 | Blue-Green    | No       | Immediate switch | Very fast                  |
 | Canary        | No       | Progressive      | Very fast                  |
 
+## Jobs and CronJobs
+
+Kubernetes supports different types of workloads depending on the application lifecycle, which can be broadly divided into long-running workloads and batch workloads.  
+For long-running applications (such as web applications), Deployments are typically used.  
+For jobs like batch processing, analytics or reporting, that are meant to live for a short period of time, performing specific tasks and then finish, the `Job` is the good choice.
+
+> [!CAUTION]
+>
+> If you create a Pod instead of a Job to perform a short-lived task, like in tis example
+>
+> ```yaml
+> apiVersion: v1
+> kind: Pod
+> metadata:
+>   name: math-pod
+> spec:
+>   containers:
+>   - name: math-add
+>     image: ubuntu
+>     command: ['expr', '3', '+', '2']
+> ```
+>
+> you'll risk to trigger multiple restarts on the container because after it completes, Kubernetes continues to bring the container up again.  
+> This is because the default restart policy for Pods is `Always`, which consists in restarting the container in an attempt to keep it running, until a threshold is reached.  
+> This behaviour is defined by the property `spec.restartPolicy` which by default is set to always.  
+> You can override this behaviour by setting this property to `Never` or `OnFailure`.  
+> But anyway, this pattern is discouraged and we should define short-lived tasks in Jobs or CronJobs instead of Pods.
+
+While `ReplicaSet` is used to make sure a specified number of pods is running at all time, a `Job` is used to run a set of pods to perform a given task to completion.
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: math-add-job
+spec:
+  template:
+    spec:
+      containers:
+      - name: math-add
+        image: ubuntu
+        command: ['expr', '3', '+', '2']
+      restartPolicy: Never
+```
+
+> [!NOTE]
+>
+> Jobs only support `restartPolicy: Never` or `OnFailure`.  
+> `restartPolicy: Always` is not allowed.
+
+```console
+$ kubectl create -f job-definition.yaml
+job.batch/math-add-job created
+
+$ kubectl get jobs
+NAME           STATUS    COMPLETIONS   DURATION   AGE
+math-add-job   Running   0/1           6s         6s
+
+$ kubectl get jobs
+NAME           STATUS     COMPLETIONS   DURATION   AGE
+math-add-job   Complete   1/1           14s        36s
+```
+
+We can see, also for the containers of a job, the standard output of their command with the command `kubectl logs <pod name>` or `kubectl logs job/<job name>`
+
+```console
+$ kubectl get pods
+NAME                     READY   STATUS      RESTARTS        AGE
+math-add-job-xxxbx       0/1     Completed   0               4m39
+
+$ kubectl logs math-add-job-xxxbx
+5
+```
+
+Finally, to delete the job run `kubectl delete job`
+
+```console
+$ kubectl delete job math-add-job
+job.batch "math-add-job" deleted from default namespace
+```
+
+deleting the Job also deletes the Pods it created.
+
+```console
+$ kubectl get pods
+No resources found in default namespace.
+```
+
+If the Job must complete successfully multiple times, set the `spec.completions` parameter.
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: math-add-job
+spec:
+  completions: 3
+  template:
+    spec:
+      containers:
+      - name: math-add
+        image: ubuntu
+        command: ['expr', '3', '+', '2']
+      restartPolicy: Never
+```
+
+```console
+$ kubectl create -f job-definition.yaml
+job.batch/math-add-job created
+
+$ kubectl get jobs
+NAME           STATUS    COMPLETIONS   DURATION   AGE
+math-add-job   Running   0/3           3s         3s
+
+$ kubectl get jobs
+NAME           STATUS    COMPLETIONS   DURATION   AGE
+math-add-job   Running   1/3           7s         7s
+
+$ kubectl get jobs
+NAME           STATUS    COMPLETIONS   DURATION   AGE
+math-add-job   Running   2/3           11s        11s
+
+$ kubectl get jobs
+NAME           STATUS     COMPLETIONS   DURATION   AGE
+math-add-job   Complete   3/3           16s        16s
+
+$ kubectl get pods
+NAME                 READY   STATUS      RESTARTS   AGE
+math-add-job-7g5g7   0/1     Completed   0          60s
+math-add-job-mc2rh   0/1     Completed   0          65s
+math-add-job-nls7g   0/1     Completed   0          70s
+```
+
+If completions is set to 3, Kubernetes waits until three Pods complete successfully.
+Failed Pods do not count towards the completion count.  
+If the pods fail (for example because the application exits with an error), the Job counts only successful Pod completions toward `.spec.completions` while failed Pods are retried until `.spec.backoffLimit` is reached.
+
+There are situations where you want to fail a Job after some amount of retries due to a logical error in configuration etc.  
+To do so, set `.spec.backoffLimit` to specify the number of retries before considering a Job as failed.  
+Every failed Pod counts towards the `backoffLimit`. Once this limit is reached, the Job is marked as failed.  
+The `.spec.backoffLimit` is set by default to 6.  
+In this case (where the Pod randomly fails) we want to increase it in order to only count successful jobs.
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: random-error-job
+spec:
+  completions: 3
+  backoffLimit: 30
+  template:
+    spec:
+      containers:
+      - name: random-error
+        image: kodekloud/random-error
+      restartPolicy: Never
+```
+
+```console
+$ kubectl create -f job-definition.yaml
+job.batch/random-error-job created
+
+$ kubectl get job
+NAME               STATUS     COMPLETIONS   DURATION   AGE
+random-error-job   Complete   3/3           47s        63s
+
+$ kubectl get pod
+NAME                     READY   STATUS      RESTARTS   AGE
+random-error-job-5kdkz   0/1     Error       0          48s
+random-error-job-kzl9g   0/1     Completed   0          65s
+random-error-job-ljwrd   0/1     Completed   0          23s
+random-error-job-q7xkl   0/1     Completed   0          27s
+random-error-job-xgbs5   0/1     Error       0          60s
+```
+
+By default the pods are created one after the other (the next pod is created only after the previous is finished).  
+We can get the jobs created in parallel instead of sequentially with the property `spec.parallelism`.
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: random-error-job
+spec:
+  completions: 3
+  parallelism: 3
+  backoffLimit: 30
+  template:
+    spec:
+      containers:
+      - name: random-error
+        image: kodekloud/random-error
+      restartPolicy: Never
+```
+
+In this example, the job creates first 3 pods at once and then continues at rounds creating each time a number of pods equal to the missing number of completions.
+
+```console
+$ kubectl create -f job-definition.yaml
+job.batch/random-error-job created
+
+$ kubectl get pod
+NAME                     READY   STATUS      RESTARTS   AGE
+random-error-job-658nm   0/1     Completed   0          6s
+random-error-job-q2nl6   0/1     Error       0          6s
+random-error-job-vghnf   0/1     Error       0          6s
+
+$ kubectl get job
+NAME               STATUS    COMPLETIONS   DURATION   AGE
+random-error-job   Running   1/3           12s        12s
+
+$ kubectl get pod
+NAME                     READY   STATUS      RESTARTS   AGE
+random-error-job-658nm   0/1     Completed   0          13s
+random-error-job-8qgbm   0/1     Completed   0          6s
+random-error-job-pr8vb   0/1     Error       0          6s
+random-error-job-q2nl6   0/1     Error       0          13s
+random-error-job-vghnf   0/1     Error       0          13s
+
+$ kubectl get job
+NAME               STATUS    COMPLETIONS   DURATION   AGE
+random-error-job   Running   2/3           18s        18s
+
+$ kubectl get pod
+NAME                     READY   STATUS      RESTARTS   AGE
+random-error-job-658nm   0/1     Completed   0          26s
+random-error-job-8qgbm   0/1     Completed   0          19s
+random-error-job-jjzlj   0/1     Completed   0          6s
+random-error-job-pr8vb   0/1     Error       0          19s
+random-error-job-q2nl6   0/1     Error       0          26s
+random-error-job-vghnf   0/1     Error       0          26s
+
+$ kubectl get job
+NAME               STATUS     COMPLETIONS   DURATION   AGE
+random-error-job   Complete   3/3           25s        28s
+```
+
+Another common optional parameter for Jobs is `.spec.activeDeadlineSeconds`, which applies to the duration of the job, no matter how many Pods are created. Once a Job reaches this threshold, all of its running Pods are terminated and the Job status will become type: `Failed` with reason: `DeadlineExceeded`.
+
+> [!NOTE]
+>
+> `parallelism` controls how many Pods may run at the same time.  
+> `completions` controls how many successful Pod executions are required before the Job finishes.
+>
+> `spec.completions` and `spec.parallelism`, if omitted, are set to their default value, which is 1.
+
+A CronJob is a Job that can be scheduled
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: reporting-cron-job
+spec:
+  schedule: "*/1 * * * *"
+  jobTemplate:
+    spec:
+      completions: 3
+      parallelism: 3
+      backoffLimit: 30
+      template:
+        spec:
+          containers:
+          - name: random-error
+            image: kodekloud/random-error
+          restartPolicy: Never
+```
+
+We can notice that the definition of a CronJob is more complex that the one of a Job: there are now three `spec` sections: one for the CronJob, one for the Job and one for the Pod.  
+The `.spec.jobTemplate` defines a template for the Jobs that the CronJob creates, and it is required. It has exactly the same schema as a Job, except that it is nested and does not have an `apiVersion` or `kind`.  
+
+> [!IMPORTANT]
+>
+> A CronJob creates a new Job according to the specified schedule.  
+> Each Job then creates one or more Pods.
+>
+> ```text
+> CronJob
+>    │
+>    ├── Job #1
+>    │      └── Pod
+>    │
+>    ├── Job #2
+>    │      └── Pod
+>    │
+>    └── Job #3
+>           └── Pod
+> ```
+
+The schedule option is fundamental: it is a required string field in which we specify the time to be run using the Cron syntax.
+
+```text
+# ┌───────────── minute (0 - 59)
+# │ ┌───────────── hour (0 - 23)
+# │ │ ┌───────────── day of the month (1 - 31)
+# │ │ │ ┌───────────── month (1 - 12)
+# │ │ │ │ ┌───────────── day of the week (0 - 6) (Sunday to Saturday)
+# │ │ │ │ │                                   OR sun, mon, tue, wed, thu, fri, sat
+# │ │ │ │ │
+# │ │ │ │ │
+# * * * * *
+```
+
+For example, `0 3 * * 1` means this task is scheduled to run weekly on a Monday at 3 AM.
+
+Other common optional parameters for CronJobs are:
+
+- `.spec.concurrencyPolicy`: specifies how to treat concurrent executions of a Job that is created by this CronJob. The spec may specify only one of the following concurrency policies:
+  - `Allow` (default): the CronJob allows concurrently running Jobs;
+  - `Forbid`: the CronJob does not allow concurrent runs (if it is time for a new Job run and the previous Job run hasn't finished yet, the CronJob skips the new Job run);
+  - `Replace`: if it is time for a new Job run and the previous Job run hasn't finished yet, the CronJob replaces the currently running Job run with a new Job run;
+- `.spec.successfulJobsHistoryLimit`: specifies the number of successful finished jobs to keep. The default value is 3. Setting this field to 0 will not keep any successful jobs;
+- `.spec.failedJobsHistoryLimit`: specifies the number of failed finished jobs to keep. The default value is 1. Setting this field to 0 will not keep any failed jobs;
+- `.spec.startingDeadlineSeconds`: defines a deadline (in whole seconds) for starting the Job, if that Job misses its scheduled time for any reason;
+- `.spec.suspend`: if you do set that field to `true`, all subsequent executions are suspended (they remain scheduled, but the CronJob controller does not start the Jobs to run the tasks) until you unsuspend the CronJob;
+- `.spec.ttlSecondsAfterFinished`: it specifies how long Kubernetes keeps a completed Job before automatically deleting it (it will delete the Job cascadingly, i.e. delete its dependent objects, such as Pods, together with the Job).
+
+| Resource   | Long running       | Executes once      | Scheduled          |
+| ---------- | ------------------ | ------------------ | ------------------ |
+| Pod        | :white_check_mark: | :x:                | :x:                |
+| Deployment | :white_check_mark: | :x:                | :x:                |
+| Job        | :x:                | :white_check_mark: | :x:                |
+| CronJob    | :x:                | :white_check_mark: | :white_check_mark: |
+
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
 The exam lasts 2 hours and typically includes around 15–20 performance-based tasks.
