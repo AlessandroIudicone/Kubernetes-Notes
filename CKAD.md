@@ -3118,6 +3118,287 @@ Other common optional parameters for CronJobs are:
 | Job        | :x:                | :white_check_mark: | :x:                |
 | CronJob    | :x:                | :white_check_mark: | :white_check_mark: |
 
+## Network policies
+
+### Description of Ingress and Egress in non Kubernetes environments
+
+Network traffic can be viewed from two perspectives: **ingress** (incoming traffic) and **egress** (outgoing traffic).
+
+For example, in a WebApplication that:
+
+- receives client requests on the WebServer on port 80
+- performs the request to the app Server exposing API on port 5000
+- interacts with the database on port 3306
+
+```text
+            Ingress
+               │ 80
+               ▼
+        +----------------+
+        |   Web Server   |
+        +----------------+
+               │ 5000
+         Egress│Ingress
+               ▼
+        +----------------+
+        |   API Server   |
+        +----------------+
+               │ 3306
+         Egress│Ingress
+               ▼
+        +----------------+
+        |    Database    |
+        +----------------+
+```
+
+Ingress and Egress traffic are divided as follows
+
+- for the web server
+
+  - the incoming traffic from the users on the default port 80 is ingress;
+  - the outgoing request to the app server on the 5000 port is egress traffic;
+
+- for the app that serves API:
+
+  - the incoming traffic from the web server through the port 5000 is ingress;
+  - the outgoing request to the database on port 3306 is egress traffic;
+
+- for the Database perspective:
+
+  - it receives ingress traffic on port 3306 from the API server.
+
+If we should list the necessary rules to make this system work, we would have:
+
+- an ingress rule that accepts HTTP traffic on port 80 on the webserver;
+- an egress rule to allow traffic from the WebServer to port 5000 of the API server;
+- an ingress rule to accept traffic on port 5000 on the API Server;
+- an egress rule to allow traffic to port 3306 on the database server;
+- an ingress rule on the DataBase server to accept traffic on the port 3306.
+
+### Need of Network Policies for Kubernetes environments
+
+In Kubernetes, each `Node`, `Pod` and `Service` has its own IP address.  
+One of the prerequisites in Kubernetes is that, whatever solution is implemented, the pods should be able to communicate with each other without having to configure any additional settings (like routes).  
+Pods are part of a flat network where, by default, every Pod can directly communicate with every other Pod without NAT, regardless of which node they run on.
+
+> [!IMPORTANT]
+>
+> By default, Pods are **non-isolated**:
+>
+> - all ingress traffic is allowed;
+> - all egress traffic is allowed.
+>
+> A Pod becomes isolated only when at least one NetworkPolicy selects it.
+
+Coming back to the example made in the previous paragraph, in order to reach that architecture, we can:
+
+- create a pod for the front-end, one for the API server and one for the database;
+- create services to expose the pods.
+
+but considering that by default all pods can talk to each other, in this way the front-end pod is able to communicate directly with the database pod.  
+If we want to avoid that (maybe the security team or an audit required to prevent that to happening), that is where we would implement a **Network Policy** to allow traffic to the DB server only from the API server.
+
+### Network Policies in Kubernetes environments
+
+A `NetworkPolicy` is a namespaced Kubernetes resource that defines which network connections are allowed to and/or from a selected set of Pods.  
+In order to apply a `NetworkPolicy` on a pod we use labels and selectors: we label the pod and we use the same label on the `podSelector` field in the `NetworkPolicy`.  
+When building the rule, under `spec.policyTypes` we can specify whether the NetworkPolicy controls Ingress traffic, Egress traffic, or both.  
+Finally, we define the allowed sources or destinations and, optionally, restrict them to specific ports and protocols.  
+Once a Pod is selected by an Ingress `NetworkPolicy`, all ingress traffic is denied unless explicitly allowed by one or more matching `NetworkPolicy`.
+
+> [!IMPORTANT]
+>
+> NetworkPolicies are additive.  
+> If multiple NetworkPolicies select the same Pod, the allowed traffic is the union of all rules.
+>
+> Kubernetes does not evaluate NetworkPolicies in order.
+
+In the case above, we would say "only allow ingress traffic from the API pod on the port 3306".  
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-policy
+spec:
+  podSelector:
+    matchLabels:
+      role: db
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          name: api-pod
+    ports:
+    - protocol: TCP
+      port: 3306
+```
+
+> [!IMPORTANT]
+>
+> A NetworkPolicy is allow-based.  
+> You specify what traffic is allowed. Everything else is denied for the selected Pods.
+
+NetworkPolicies are enforced only if the cluster uses a **Container Network Interface** (CNI) plugin that supports them.  
+Not all network solutions support NetworkPolicies. A few of them that support them are:
+
+- Kube-router
+- Calico
+- Romana
+- Weave Net
+
+If we use Flannel for example, it does not currently support NetworkPolicies.  
+Anyway, also in a cluster configured with a Network Solution that does not support NetworkPolicies, we can still create the policies, but they will just not be enforced.  
+In other words, NetworkPolicies are defined by Kubernetes, but enforcement is delegated to the CNI plugin
+
+Thinking about ingress and egress traffic, you could think that:
+
+- the outgoing response of an incoming request;
+- the incoming response of an outgoing request;
+
+needs a different rule; however no additional rule is needed because NetworkPolicies are stateful: once a connection is allowed, the corresponding return traffic is automatically permitted.  
+So when defining NetworkPolicies, you don't need to worry about the request responses.
+
+There are additional selectors that can be used in `NetworkPolicies`, like
+
+- `namespaceSelector`: defines from which namespace the traffic is allowed to reach the pod.
+
+  ```yaml
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: prod
+  ```
+
+- `ipBlock`: defines a range of IP addresses from which allow traffic to the pod. It's commonly used to allow traffic from external IP addresses or external networks.
+
+  ```yaml
+      - ipBlock:
+          cidr: 192.168.5.10/32
+  ```
+
+The same is valid for egress traffic.
+
+| Selector          | Matches    |
+| ----------------- | ---------- |
+| podSelector       | Pods       |
+| namespaceSelector | Namespaces |
+| ipBlock           | IP ranges  |
+
+Those rule selectors can be passed separately (as separate rules) or grouped together (as part of a single rule).
+
+> [!IMPORTANT]
+>
+> Inside a single from (or to) entry, different selectors are combined with a logical AND.  
+> Multiple entries in the from (or to) list are combined with a logical OR.
+
+In the following example, we have two ingress elements / rules:
+
+- the first rule states that traffic from pods labeled with `name: api-pod` in the `prod` namespace is allowed;
+- the second rule states that traffic from ip ranges in the family `192.168.5.10/32` is allowed;
+
+Traffic from sources meeting either of these criteria are allowed to pass through.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: db-policy
+spec:
+  podSelector:
+    matchLabels:
+      role: db
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          name: api-pod
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: prod
+    - ipBlock:
+        cidr: 192.168.5.10/32
+    ports:
+    - protocol: TCP
+      port: 3306
+  egress:
+  - to:
+    - ipBlock:
+        cidr: 192.168.5.10/32
+    ports:
+    - protocol: TCP
+      port: 80
+```
+
+In case you need to differentiate rules for ports or protocols, you can define multiple ingress or egress rules, each with its own `from` or `to` clause like in the following example.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: internal-policy
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      name: internal
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          name: payroll
+    ports:
+    - protocol: TCP
+      port: 8080
+  - to:
+    - podSelector:
+        matchLabels:
+          name: mysql
+    ports:
+    - protocol: TCP
+      port: 3306
+```
+
+This is an example of NetworkPolicy that selects every Pod in the namespace and denies all incoming and outgoing traffic.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+```
+
+> [!TIP]
+>
+> A NetworkPolicy never creates connectivity.
+> It only restricts connectivity that already exists.  
+> Pods must already be able to communicate through the CNI plugin.
+>
+> NetworkPolicies apply only to Pods.  
+> They do **not** apply to:
+>
+> - Nodes
+> - Services
+> - Ingress resources
+
+Useful commands:
+
+- `kubectl get NetworkPolicies`: list all NetworkPolicies;
+- `kubectl get networkpolicy`: same as above;
+- `kubectl get networkpolicies`: same as above;
+- `kubectl describe netpol <NetworkPolicy name>`: returns details about a specific NetworkPolicy.
+
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
 The exam lasts 2 hours and typically includes around 15–20 performance-based tasks.
