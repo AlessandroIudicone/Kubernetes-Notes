@@ -90,6 +90,7 @@ Useful commands:
 - `kubectl explain <resource name>.<field name>`: gives details on the Kind and lists the subfields and their type;
 - `kubectl explain <resource name> --recursive`: lists all fields that we would put in the yaml file;
 - `kubectl get all --no-headers`: list all the objects created in the default namespace, without printing the header line;
+- `kubectl get all -A`: list all the objects in all namespaces;
 - `kubectl <command> [subcommand] --help`: gives information about the current command and subcommand, included the different available parameters;
 - `kubectl edit <resource> <resource name>` edit manifest of a resource on-the-fly.
 
@@ -353,12 +354,12 @@ This happens because:
 - `svc` stands for `Service`.
 
 The `namespace` can also be specified inside the `metadata` section of the various manifest files described above.  
-There is also an option to show the resources in all namespaces, which is `--all-namespaces`.
+There is also an option to show the resources in all namespaces, which is `--all-namespaces` and the shorthand is `-A`.
 
 Some commands:
 
 - `kubectl get pod --all-namespaces`: retrieves all the pods in all the namespaces;
-- `kubectl get service --all-namespaces`: retrieves all the services in all the namespace;
+- `kubectl get service -A`: retrieves all the services in all the namespace;
 - `kubectl get service -n [namespace name]`: retrieves all the services in a specific namespace (if not specified, the default namespace will be used).
 
 ## Service
@@ -3398,6 +3399,598 @@ Useful commands:
 - `kubectl get networkpolicy`: same as above;
 - `kubectl get networkpolicies`: same as above;
 - `kubectl describe netpol <NetworkPolicy name>`: returns details about a specific NetworkPolicy.
+
+## Ingress Networking
+
+### Why do we need Ingress instead of exposing Services directly ?
+
+With a Service, if we want to expose an application to the external world, we can use a Service of type NodePort.  
+NodePort exposes the Service on a high TCP port (typically in the 30000–32767 range). Although functional, this is generally not suitable for production because users must access non-standard ports and additional infrastructure is usually required to provide a stable HTTP/HTTPS entry point.
+In order to remediate, we could add a reverse proxy that accepts requests on port 80 and redirects them to the port exposed by the NodePort.  
+The reverse proxy provides the public entry point, handles HTTP/HTTPS traffic and forwards requests to the NodePort Service.  
+We can then point our DNS to this created server and finally users are able to access the application by simply visiting the FQDN.  
+All this is possible if the application is hosted on-premise.
+
+```text
+                Internet
+                   │
+         www.my-online-store.com
+                   │
+          HTTP :80 / HTTPS :443
+                   │
+        +---------------------+
+        |   Reverse Proxy     |
+        |  (NGINX / HAProxy)  |
+        +---------------------+
+                   │
+              NodeIP:30080
+external infra     |
+═══════════════════════════════════════
+Kubernetes cluster |
+                   │
+           +--------------+
+           | Service (NP) |
+           |    :30080    |
+           +--------------+
+                   │
+      ┌────────────┼────────────┐
+      │            │            │
+   +-------+   +-------+     +-------+
+   | Pod 1 |   | Pod 2 |     | Pod 3 |
+   +-------+   +-------+     +-------+
+```
+
+If instead we are on a public cloud environment, we use a service of type `LoadBalancer` instead of `NodePort`.  
+The cloud provider automatically provisions an external load balancer that forwards traffic to the Service, typically through the NodePort automatically allocated for that Service.
+The load balancer has an external IP that can be provided to allow users to access the application.  
+We then set the DNS to point to this IP and users are finally able to access the application with the FQDN.
+
+```text
+               Internet
+                   │
+         www.my-online-store.com
+                   │
+          HTTP :80 / HTTPS :443
+                   │
+        +---------------------+
+        | Cloud Load Balancer |
+        | (AWS/GCP/Azure)     |
+        +---------------------+
+                   |
+              NodeIP:30080
+cloud provider     │
+═══════════════════════════════════════
+Kubernetes Cluster |
+           +--------------+
+           | Service (LB) |
+           |    :30080    |
+           +--------------+
+                   │
+      ┌────────────┼────────────┐
+      │            │            │
+   +-------+    +-------+    +-------+
+   | Pod 1 |    | Pod 2 |    | Pod 3 |
+   +-------+    +-------+    +-------+
+```
+
+If a new application in the same cluster needs to be exposed to the public on the same FQDN but a different URL, we then need:
+
+- in case of on-premise: create a new Service of type `NodePort` and another reverse proxy listening on a different port;
+- in case of cloud provider: create a new Service of type `LoadBalancer` which provisions another Load Balancer component set on a different port and witha different IP, which will result in increased costs.
+
+If both applications must be exposed under the same FQDN, something must inspect the incoming URL and decide where to send the request.  
+This requires an additional reverse proxy (or another load balancer) capable of URL-based routing.  
+Every time a new application is deployed, this external component must be reconfigured.  
+This means that routing configuration lives outside Kubernetes, making deployments harder to automate and maintain.
+
+> [!TIP]
+>
+> The routing may also be based on the requested host (for example shop.example.com and api.example.com) instead of the URL path.
+
+Finally, we also need to enable SSL for the applications, so the users can access the application using HTTPS.  
+We can do this at different levels:
+
+- application level
+- load balancer / proxy-server level
+
+Managing TLS inside every application would require every development team to implement and maintain certificates independently.  
+Instead, it is preferable to terminate TLS at a single entry point, providing a consistent configuration for every application.
+
+We also need to configure firewall rules for every externally exposed service.
+
+```text
+                         Internet
+                             │
+                  www.my-online-store.com
+                             │
+                    HTTP :80 / HTTPS :443
+                             │
+            +-----------------------------------+
+            |        External Proxy / LB        |
+            |       (URL-based Routing)         |
+            |          /app1     /app2          |
+            +-----------------------------------+
+                   │                      │
+            NodeIP:30080           NodeIP:30082
+cloud provider     │                      │
+══════════════════════════════════════════════════════════════
+Kubernetes Cluster |                      |
+          +----------------+      +----------------+
+          | Service 1 (LB) |      | Service 2 (LB) |
+          |     :30080     |      |     :30082     |
+          +----------------+      +----------------+
+                   │                        │
+             ┌─────┴─────┐            ┌─────┴─────┐
+             │           │            │           │
+         +-------+   +-------+    +-------+   +-------+
+         | Pod 1 |   | Pod 2 |    | Pod 1 |   | Pod 2 |
+         +-------+   +-------+    +-------+   +-------+
+```
+
+Every new application requires:
+
+- another Service;
+- another externally exposed endpoint (LoadBalancer or reverse proxy);
+- additional firewall rules;
+- SSL configuration;
+- DNS changes;
+- proxy configuration updates.
+
+All of this will become difficult to manage when we scale the application.  
+Kubernetes addresses these challenges by introducing the `Ingress` resource, which centralizes external access configuration.
+
+The Ingress Controller becomes the **single entry point for the cluster**. Routing, SSL termination and virtual hosting are managed through Kubernetes Ingress resources instead of external infrastructure.
+
+```text
+                         Internet
+                             │
+                  www.my-online-store.com
+                             │
+                    HTTP :80 / HTTPS :443
+                             │
+═══════════════════════════════════════════════════════════
+Kubernetes Cluster           |
+                  +--------------------+
+                  | Service (NP or LB) |
+                  +--------------------+
+                             │
+            +-----------------------------------+
+            |        Ingress Controller         |
+            +-----------------------------------+
+            /app1  |                  /app2 |
+          +-----------------+      +-----------------+
+          | Service 1 (CIP) |      | Service 2 (CIP) |
+          +-----------------+      +-----------------+
+                   │                        │
+             ┌─────┴─────┐            ┌─────┴─────┐
+             │           │            │           │
+         +-------+   +-------+    +-------+   +-------+
+         | Pod 1 |   | Pod 2 |    | Pod 1 |   | Pod 2 |
+         +-------+   +-------+    +-------+   +-------+
+```
+
+> [!NOTE]
+>
+> An Ingress is not directly exposed to the Internet but needs a Service.
+
+| Without Ingress                     | With Ingress                            |
+| ----------------------------------- | --------------------------------------- |
+| Multiple LoadBalancers              | Single LoadBalancer                     |
+| Multiple public IPs                 | Single public IP                        |
+| Proxy configured outside Kubernetes | Routing defined in Kubernetes manifests |
+| SSL configured separately           | Centralized SSL termination             |
+| DNS/proxy changes for every app     | Only update the Ingress manifest        |
+| URL routing configured externally   | URL routing managed by Kubernetes       |
+
+> [!NOTE]
+>
+> An Ingress resource is only a set of routing rules stored in Kubernetes and does not receive network traffic by itself.  
+> An Ingress Controller (such as NGINX Ingress Controller or Traefik) is the component responsible for implementing those rules.
+
+### Ingress and Ingress Controller
+
+Think of ingress as a Layer 7 LoadBalancer built into the Kubernetes cluster that can be configured using native Kubernetes primitives.
+
+In order to implement Ingresses, you need two elements
+
+- **Ingress Controller**: deploy a reverse proxy or a load balancing solution on the Kubernetes Cluster;
+- **Ingress resources**: define the configuration (routes, cerrtificats, etc) in `Ingress` Kubernetes manifests.
+
+> [!NOTE]
+>
+> If you simply create Ingress resources (without deploying an Ingress controller) they won't work.  
+> A Kubernetes cluster does not come with an Ingress Controller by default.
+
+There are many available solutions for Ingress controller like NGINX, HAPROXY, Traefik, GCE (Google Layer 7 Load Balancer), Contour.  
+Out of these, NGINX and GCE are currently being supported and maintained by the Kubernetes project.
+
+Keep in mind that the load balancer component is just a part of Ingress Controllers.  
+Ingress Controllers have additional intelligence to monitor the Kubernetes Cluster for definitions of ingress resources and configure the underlying proxy accordingly.
+
+### Simplified architecture of an Ingress Controller
+
+> [!NOTE]
+>
+> Modern Kubernetes clusters usually install Ingress Controllers using Helm charts or vendor-provided manifests.  
+> The following Deployment is intentionally simplified to illustrate the components involved.
+
+In the following example we'll use NGINX as Ingress Controller.  
+NGINX controller is deployed just as another Deployment in Kubernetes.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-ingress-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: nginx-ingress
+  template:
+    metadata:
+      labels:
+        app: nginx-ingress
+    spec:
+      containers:
+      - name: nginx-ingress-controller
+        image: registry.k8s.io/ingress-nginx/controller:v1.13.1
+        args:
+        - /nginx-ingress-controller
+        - --configmap=$(POD_NAMESPACE)/nginx-configuration
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - name: http
+          containerPort: 80
+        - name: https
+          containerPort: 443
+```
+
+We also passed two environment variables, carrying the Pod name and namespace.  
+The NGINX service requires them to read the configuration data between the pod.
+
+Finally specify the ports used by the Ingress Controller which are `80` and `443`.
+
+We also add an empty ConfigMap to pass future values (like `err-log-path`, `keep-alive` and `ssl-protocols`)
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-configuration
+```
+
+In order to expose the Ingress Controller externally, we add a `Service` of type `NodePort` with the selector pointing to the label of the pod.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-ingress
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  - port: 443
+    targetPort: 443
+    protocol: TCP
+    name: https
+  selector:
+    name: nginx-ingress
+```
+
+As said before, Ingress Controller can monitor the cluster and configure the underlying NGINX server when something changes.  
+But in order for the Incress Controller to do this, we need a `ServiceAccount` with the right set of permissions defined with `Roles`, `ClusterRoles` and `RoleBindings`.
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nginx-ingress-serviceaccount
+```
+
+```bash
+kubectl create -f nginx-ingress-controller.yaml
+kubectl create -f nginx-configuration.yaml
+kubectl create -f nginx-ingress.yaml
+kubectl create -f nginx-ingress-serviceaccount.yaml
+```
+
+### Ingress resources
+
+Let's define now some Ingress rules on the Ingress Controller via `Ingress` resources.
+
+You can create Ingress rules to, for example:
+
+- simply forward Ingress traffic to a single application;
+- route traffic to different applications based on URLs,
+- route traffic to different applications based on the domain name (FQDN).
+
+In the first case, the section `defaultBackend` defines where the traffic is routed to.  
+Considering that it's a single backend, we don't need any specific rule; simply specifying service name and port is enough.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-wear
+spec:
+  ingressClassName: nginx
+  defaultBackend:
+    service:
+      name: wear-service
+      port:
+        number: 80
+```
+
+```bash
+kubectl create -f ingress-wear.yaml
+```
+
+Now we can retrieve the created Ingress
+
+```console
+$ kubectl get ingress
+NAME           CLASS    HOSTS   ADDRESS   PORTS   AGE
+ingress-wear   <none>   *                 80      32s
+```
+
+If instead, we want to create different rules based on different URLs, we can do the following
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-wear-watch
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /wear
+        pathType: Prefix
+        backend:
+          service:
+            name: wear-service
+            port:
+              number: 80
+      - path: /watch
+        pathType: Prefix
+        backend:
+          service:
+            name: watch-service
+            port:
+              number: 80
+```
+
+The available path types are the following
+
+| pathType               | Meaning              |
+| ---------------------- | -------------------- |
+| Exact                  | Exact URL            |
+| Prefix                 | Prefix matching      |
+| ImplementationSpecific | Controller-dependent |
+
+```bash
+kubectl create -f ingress-wear-watch.yaml
+```
+
+We now see two backend URLs under the `Rules` section.
+
+```console
+$ kubectl describe ingress ingress-wear-watch
+Name:             ingress-wear-watch
+Labels:           <none>
+Namespace:        default
+Address:
+Ingress Class:    <none>
+Default backend:  <default>
+Rules:
+  Host        Path  Backends
+  ----        ----  --------
+  *
+              /wear    wear-service:80 (<error: services "wear-service" not found>)
+              /watch   watch-service:80 (<error: services "watch-service" not found>)
+Annotations:  <none>
+Events:       <none>
+```
+
+You can also still notice that the `Default backend` field is empty.  
+We can specify the `defaultBackend` which is the redirect applied when the URL hit does not match any of the rules.  
+If omitted, unmatched requests typically receive a 404 response generated by the Ingress Controller.
+
+The third of configuration is using domain names or host names.  
+In this case we create 2 rules (one for each domain) and we add the field `host` to each rule.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-wear-watch
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: wear.my-online-store.com
+    http:
+      paths:
+      - path: /wear
+        pathType: Prefix
+        backend:
+          service:
+            name: wear-service
+            port:
+              number: 80
+  - host: watch.my-online-store.com
+    http:
+      paths:
+      - path: /watch
+        pathType: Prefix
+        backend:
+          service:
+            name: watch-service
+            port:
+              number: 80
+```
+
+> [!CAUTION]
+>
+> URL-based routing usually uses a single rule containing multiple paths.
+> Host-based routing instead uses one rule for each host.
+
+You can also add TLS on an ingress
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tls-example-ingress
+spec:
+  tls:
+  - hosts:
+      - https-example.foo.com
+    secretName: testsecret-tls
+  rules:
+  - host: https-example.foo.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: service1
+            port:
+              number: 80
+```
+
+and the certificate is retrieved from a Secret that must contain the fields `tls.crt` and `tls.key`
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: testsecret-tls
+  namespace: default
+data:
+  tls.crt: base64 encoded cert
+  tls.key: base64 encoded key
+type: kubernetes.io/tls
+```
+
+### IngressClass
+
+In modern Kubernetes clusters, multiple Ingress Controllers may coexist.
+
+For example:
+
+- NGINX
+- Traefik
+- HAProxy
+
+Each controller watches only the Ingress resources that belong to its own class.
+
+An `IngressClass` is a cluster-scoped resource that identifies which Ingress Controller should implement a given Ingress resource.  
+An `Ingress` references it through the field
+
+```yaml
+spec:
+  ingressClassName: nginx
+```
+
+for example
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: nginx
+spec:
+  controller: k8s.io/ingress-nginx
+```
+
+The corresponding Ingress than becomes
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  ...
+```
+
+```text
+           Ingress
+  ingressClassName: nginx
+             │
+             ▼
+     +----------------+
+     | IngressClass   |
+     |     nginx      |
+     +----------------+
+             │
+             ▼
++---------------------------+
+| NGINX Ingress Controller  |
++---------------------------+
+```
+
+If an `Ingress` does not specify an `ingressClassName`, the cluster may:
+
+- assign the default IngressClass;
+- ignore the Ingress if no default exists.
+
+This depends on how the Ingress Controllers are configured.
+
+> [!NOTE]
+>
+> Before Kubernetes v1.18 it was common to specify the controller through the annotation
+>
+> ```yaml
+> kubernetes.io/ingress.class: nginx
+> ```
+>
+> This annotation is now deprecated in favour of the ingressClassName field.
+
+### Additional options
+
+Different ingress controllers have different options that can be used to customise the way it works.
+
+For example, [NGINX Ingress controller has many options](https://kubernetes.github.io/ingress-nginx/examples/) that can be passed as environment variables or annotations.
+
+One useful argument to pass to the NGINX Ingress Controller allows the controller to route unmatched requests to a default `Service`, even if no default backend is defined in the `Ingress` resource.
+
+```yaml
+        args:
+        - --default-backend-service=<namespace>/<service>
+```
+
+While some common examples of Annotations for the NGINX Ingress Controller are:
+
+| Annotation                                    | Purpose                                                               |
+| --------------------------------------------- | --------------------------------------------------------------------- |
+| `nginx.ingress.kubernetes.io/rewrite-target`  | Rewrites the request path before forwarding it to the backend Service |
+| `nginx.ingress.kubernetes.io/ssl-redirect`    | Redirects HTTP requests to HTTPS                                      |
+| `nginx.ingress.kubernetes.io/proxy-body-size` | Sets the maximum accepted request body size                           |
+
+These annotations are specific to the NGINX Ingress Controller. Other Ingress Controllers may use different annotations or configuration mechanisms.
+
+Useful commands:
+
+- `kubectl create ingress <ingress-name> --rule="host/path=service:port"`: template for creating an Ingress imperatively;
+- `kubectl create ingress ingress-test --rule="wear.my-online-store.com/wear*=wear-service:80"`: creates an Ingress that routes requests for `wear.my-online-store.com` whose path starts with `/wear` to the `wear-service` Service on port 80.
 
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
