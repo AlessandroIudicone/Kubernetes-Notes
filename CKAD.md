@@ -487,7 +487,7 @@ spec:
 ```
 
 With the headless service, DNS queries return the IP addresses of the individual pods behind the Service.  
-This is commonly used by StatefulSets.  
+This is commonly used by Stateful Sets.  
 So the headless service allows to communicate with an exact pod instead of landing on a random one chosen by the ClusterIP.  
 An use case of this type of service, is when you have to deal with a stateful application; for example a Database, when there is a master node that allows writing and many worker nodes that allows only reading, and you need to chose to land on one of them based if you need to write or read data.
 
@@ -3990,6 +3990,572 @@ Useful commands:
 
 - `kubectl create ingress <ingress-name> --rule="host/path=service:port"`: template for creating an Ingress imperatively;
 - `kubectl create ingress ingress-test --rule="wear.my-online-store.com/wear*=wear-service:80"`: creates an Ingress that routes requests for `wear.my-online-store.com` whose path starts with `/wear` to the `wear-service` Service on port 80.
+
+## State Persistence: Storage, Volumes and StatefulSets
+
+### Storage in Docker
+
+#### How Docker stores data
+
+In Docker you normally learn **Storage Drivers** and **Volume Drivers**.
+
+By default, Docker stores its local data under `/var/lib/docker` with the following structure:
+
+```text
+/var/lib/docker
+          ├── aufs
+          ├── containers (data related to containers)
+          ├── image (data related to images)
+          └── volumes (volumes data)
+```
+
+#### Docker layered filesystem
+
+Docker images use a layered filesystem: most of the instructions in a Dockerfile create a new immutable image layer containing only the changes introduced by that instruction.  
+When a container is started, Docker adds a thin writable layer on top of the image layers. All changes made by the running container (new files, modified files and deleted files) are stored in this writable layer.
+
+The writable container layer exists only for the lifetime of the container; when the container is destroyed, this layer and all its chages are destroyed too, while the image layers are still intact (and possibly are also shared with other images).
+
+```text
+                 Docker Image
+      +-------------------------------+
+      | Layer 3 (read-only)           |
+      +-------------------------------+
+      | Layer 2 (read-only)           |
+      +-------------------------------+
+      | Layer 1 (read-only)           |
+      +-------------------------------+
+                   ▲
+                   │
+        Writable Container Layer
+      +-------------------------------+
+      | runtime changes               |
+      +-------------------------------+
+```
+
+#### Why we need volumes in Docker
+
+The writable layer is ephemeral. If the container is removed, all data stored in that layer disappears as well.  
+This is not suitable for persistent application data such as databases or uploaded files.  
+To persist data independently of the container lifecycle, Docker provides volumes.
+
+#### Named volume vs bind mount
+
+The command `docker run -v volume_name:/var/lib/mysql mysql` mounts the volume named `volume_name` on the container. If the volume does not already exist, Docker creates it automatically before mounting it.  
+The data used in named volumes, like the one above, is stored inside the folder `/var/lib/docker/volumes`.  
+This is called **volume mount**.
+
+In case we want to instead store the data of the container in a different location, so we want to mount a folder of a local docker host filepath inside the container (instead of a volume) we can provide the directory to the command, like `docker run -v /data/mysql:/var/lib/mysql mysql`.  
+In case a file or directory provided does not yet exist on the Docker host, Docker automatically creates the directory on the host for you.  
+This is called **bind mount**.  
+Unlike named volumes, bind mounts rely on a specific path on the Docker host.
+
+> [!IMPORTANT]
+>
+> The writable container layer is intended for temporary runtime data only.  
+> Any important application data should be stored in a Docker volume or bind mount; otherwise it will be lost when the container is removed.
+
+Another important thing about mounting is that the syntax `--mount` is generally preferred over `-v` because is more explicit and supports all the available options.  
+With `--mount`, the commands above can be rewritten as:
+
+- `docker run --mount type=volume,src=volume_name,dst=/var/lib/mysql,rw mysql` ;
+- `docker run --mount type=bind,source=/data/mysql,target=/var/lib/mysql mysql` .
+
+#### Storage Drivers vs Volume Drivers
+
+At this point, it is important to distinguish between two different concepts:
+
+- **Storage Drivers**: manage image layers and the writable container layer;
+- **Volume Drivers**: manage persistent volumes independently of the container filesystem.
+
+The copy-on-write (CoW) mechanism used by Docker images and containers is managed by the **Storage drivers**.  
+Docker automatically selects the most appropriate storage driver supported by the host operating system.
+
+Volumes instead, are not handled by storage drivers but **Volume driver plugins**.  
+Volume drivers are responsible only for managing volumes; they are independent from the storage driver used for image layers.  
+A Volume Driver plugin can also provision storage on external systems instead of using the local filesystem.  
+The default volume driver plugin is **Local** but there are many others that we can choose, including the cloud provider ones.
+
+### Volumes in Kubernetes
+
+The Pods created in Kubernetes are transient in nature.  
+To persist data processed by the Pod, we attach a volume to them.  
+Even if the pod is deleted, the data generated or processed remains on the volume.
+
+In the following example, we create a pod and provide it a volume to store the processed data.  
+We should normally configure the volume with storage, but for now we are keeping simple and are using `hostPath` (this is not suitable for critical environments).  
+The possible values for of `spec.volumes[x].hostpath.type` are
+
+- `Directory`
+- `DirectoryOrCreate`
+- `File`
+- `FileOrCreate`
+- `Socket`
+- `CharDevice`
+- `BlockDevice`
+
+The `spec.containers[0].volumeMounts.mountPath` declares where the volume is mounted within the container.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: random-number-generator
+spec:
+  containers:
+  - name: alpine
+    image: alpine
+    command: ["/bin/sh", "-c"]
+    args: ["shuf -i 0-100 -n 1 >> /opt/number.out;"]
+    volumeMounts:
+    - name: data-volume
+      mountPath: /opt
+  volumes:
+  - name: data-volume
+    hostPath:
+      path: /data
+      type: Directory
+```
+
+From now on, any file created in the volume will be stored in the directory `/data` of my node.
+
+> [!NOTE]
+>
+> `volumeMounts` is for the container while `volumes` is for the pods.
+>
+> ```text
+> Pod
+> │
+> ├── volumes
+> │     └── data-volume
+> │
+> └── containers
+>       └── volumeMounts
+>             name: data-volume
+> ```
+
+Anyway, the hostPath works fine if we are on a single node cluster; however, it is not recomended to use in a multi-node cluster because not all the nodes have the same contents of the path specified in `hostPath.path` (unless we set up a specific solution like a replicated cluster storage solution).
+
+> [!WARNING]
+>
+> `hostPath` is mainly intended for testing, development or special system workloads.  
+> It tightly couples a Pod to a specific node because the data exists only on that node.  
+> Production applications should normally use PersistentVolumes backed by network or cloud storage instead.
+
+Kubernetes supports many storage backends, traditionally including NFS, Fibre Channel and cloud-provider block storage.  
+Modern Kubernetes clusters generally access these backends through CSI drivers.
+
+### Persistent Volumes
+
+In the previous examples we defined volumes inside Pod manifests.  
+This is not ideal in scenarios when we have to deploy multiple pods and have many deployments to manage.  
+We want to avoid that
+
+- user needs to define and configure volumes in each Pod definition file;
+- we need to redefine the multiple Pod definition file each time a modification has to be made on the volume.
+
+Instead, we want to manage the volumes centrally in a way that an administrator can create large pool of storage and the users carve out pieces from it as required.
+
+PersistentVolumes help us accomplish all of this.  
+A `Persistent Volume` is a cluster-wide pool of storage volumes, normally configured by an administrator.  
+The users can now select storage from this pool using `Persistent Volume Claims`.
+
+Here is an example manifest, where we define the `accessModes`, the `capacity` and for the volume type we use `hostPath`
+
+```yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-vol1
+spec:
+  accessModes:
+  - ReadWriteOnce
+  capacity:
+    storage: 1Gi
+  hostPath:
+    path: /tmp/data
+```
+
+The Access Mode defines how a volume should be mounted on a host and can be:
+
+- `ReadOnlyMany`: the volume can be mounted as read-only by many nodes;
+- `ReadWriteOnce`: the volume can be mounted as read-write by a single node;
+- `ReadWriteOncePod`: the volume can be mounted as read-write by a single pod;
+- `ReadWriteMany`: the volume can be mounted as read-write by many nodes.
+
+> [!CAUTION]
+>
+> A PersistentVolume is not the storage itself, but a Kubernetes abstraction representing a piece of storage made available to the cluster.
+
+```text
+                 Pod
+                  │
+           volumeMounts
+                  │
+                  ▼
+        +------------------+
+        |       PVC        |
+        |  (user request)  |
+        +------------------+
+                  │ binds to
+                  ▼
+        +------------------+
+        |       PV         |
+        | (cluster storage)|
+        +------------------+
+                  │
+                  ▼
+      NFS / EBS / Azure Disk /
+      Ceph / NetApp / CSI ...
+```
+
+### Persistent Volume Claims
+
+A `PersistentVolumeClaim` is a request for storage made by a user.  
+Pods use PVCs to access `PersistentVolumes`.
+
+> [!NOTE]
+>
+> Pods never reference a PersistentVolume directly.  
+> Instead, they reference a PersistentVolumeClaim, which abstracts the underlying storage implementation.
+
+At any given time, a `PersistentVolumeClaim` is bound to exactly one `PersistentVolume`, and a bound `PersistentVolume` can be claimed by only one `PersistentVolumeClaim`.  
+During the binding process, Kubernetes looks for a PersistentVolume that satisfies all the requirements requested by the claim, including storage capacity, access modes, volume mode, StorageClass and selector (if specified).  
+If there are multiple possible matches for a single claim and you still want to use a particular volume, you can still use Labels and Selectors to bind to the right volumes.  
+
+```yaml
+spec:
+  selector:
+    matchLabels:
+      type: fast
+```
+
+Finally note that a smaller claim may get bind to a larger volume if all the other criteria matches and there are no better options; in this case, no other claim can use the remaining capacity in the volume.  
+If there are instead no volumes available, the PVC remains in a `pending` state until newer volumes are made available to the cluster or until a StorageClass dynamically provisions one.
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: myclaim
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Mi
+```
+
+```console
+$ kubectl create -f pvc-definition.yaml
+persistentvolumeclaim/myclaim created
+
+$ kubectl get pvc myclaim
+NAME      STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS   VOLUMEATTRIBUTESCLASS   AGE
+myclaim   Bound    pvc-c192c2c7-299e-44bf-b60c-b8dccaaa772c   500Mi      RWO            standard       <unset>                 16s
+```
+
+When a `PersistentVolumeClaim` is deleted, the action taken on the underlying `PersistentVolume` depends on the `PersistentVolume`'s `persistentVolumeReclaimPolicy`:
+
+- `Retain` (default for manually created PersistentVolumes): the `PersistentVolume` is released but not deleted. Manual cleanup is required before it can be reused;
+- `Delete`: the PersistentVolume and the underlying storage are automatically deleted (if supported by the storage provider);
+- `Recycle`: the volume contents are deleted and the `PersistentVolume` becomes available again. This policy has been deprecated.
+
+> [!NOTE]
+>
+> Deleting a PersistentVolumeClaim does not necessarily guarantee that the underlying data is securely erased.  
+> Depending on the storage backend, proper cleanup may require operations such as unmounting, detaching, filesystem reformatting, snapshot removal, encryption key rotation or other provider-specific actions.
+
+Once the PVC has been created, we can use it in a POD definition file by specifying the PVC Claim name under `persistentVolumeClaim` section in the volumes section like this:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mypod
+spec:
+  containers:
+    - name: myfrontend
+      image: nginx
+      volumeMounts:
+      - mountPath: "/var/www/html"
+        name: mypd
+  volumes:
+    - name: mypd
+      persistentVolumeClaim:
+        claimName: myclaim
+```
+
+The same is true for ReplicaSets or Deployments. Add this to the pod template section of a Deployment on ReplicaSet.
+
+### Storage Classes
+
+Before StorageClasses were introduced, persistent storage was usually statically provisioned.  
+Every time an application required storage, a cluster administrator had to:
+
+- provision a storage volume on the underlying infrastructure (for example an AWS EBS volume or a GCE Persistent Disk);
+- create a matching PersistentVolume object pointing to that storage.
+
+This approach is called static provisioning.
+
+With Storage Classes instead, you can perform dynamic provisioning, which means provision volumes automatically when the application requires it.
+
+```yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ebs-rwo
+provisioner: ebs.csi.aws.com
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  type: gp3
+```
+
+> [!NOTE]
+>
+> Modern Kubernetes clusters usually provision storage through CSI (Container Storage Interface) drivers.  
+> Older in-tree provisioners such as `kubernetes.io/gce-pd` or `kubernetes.io/aws-ebs` are deprecated and remain only for backward compatibility.
+>
+> Modern CSI drivers may also support VolumeSnapshots, allowing point-in-time copies of Persistent Volumes for backup and restore operations.
+
+With this approach you don't need to create a `PersistentVolume` or a `PersistentVolume` definition manually, because the CSI provisioner creates the PV automatically.
+
+In the example we used the EBS provisioner on AWS but there are many others, like GCE GCP, Azure File, Azure Disk, Ceph FS, Portworx, Scale IO.  
+Then, the `parameters` are very specific to the provisioner used.  
+Then, there are the `volumeBindingMode`
+
+- `Immediate`: (default for many older StorageClasses) provisions the volume as soon as the PVC is created;
+- `WaitForFirstConsumer`: delays provisioning until a Pod actually uses the PVC, allowing Kubernetes to select a storage volume in the same availability zone as the scheduled Pod.
+
+For the `PersistentVolumeClaim` to use the `StorageClass`, we need to specify the StorageClass name in the PVC definition file.
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: myclaim
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: ebs-rwo
+  resources:
+    requests:
+      storage: 500Mi
+```
+
+> [!IMPORTANT]
+>
+> A `StorageClass` does not create storage by itself.  
+> Storage is dynamically provisioned only when a `PersistentVolumeClaim` referencing that `StorageClass` is created
+>
+> When the PVC is created, Kubernetes asks the provisioner specified in the `StorageClass` to allocate a new storage volume.  
+> The provisioner creates the underlying storage resource (for example an AWS EBS volume), automatically creates the corresponding `PersistentVolume`, and binds it to the PVC.
+
+| Static Provisioning     | Dynamic Provisioning       |
+| ----------------------- | -------------------------- |
+| Admin creates disk      | Disk created automatically |
+| Admin creates PV        | PV created automatically   |
+| PVC binds existing PV   | PVC triggers provisioning  |
+| Manual management       | Automatic management       |
+| More operational effort | Recommended approach       |
+
+### Stateful Sets
+
+A StatefulSet runs a group of Pods, and maintains a sticky identity for each of those Pods. This is useful for managing applications that need persistent storage or a stable, unique network identity.
+
+With stateful sets we have:
+
+- pods created in sequential order: after the first pod is deployed, it has to be in running and ready state before the next pod is deployed;
+- stable hostname and stable DNS name: each pod is assigned an unique, original and predictable name based on the ordinal index of each pod (starting with 0 for the first pod and incrementing by one for each pod);
+- stable storage: each Pod in a `StatefulSet` can automatically receive its own `PersistentVolumeClaim` through `volumeClaimTemplates`.
+
+StatefulSets are useful when:
+
+- you need to assign a stable DNS hostname, have a precise hostname and pod name on some pods;
+- you need to have a specific startup sequence for pods inside the set.
+
+This is useful for stateful applications such as databases or distributed systems where each instance may need a stable identity and persistent storage.  
+For example, a replicated database may designate one Pod as primary and others as replicas. The database software is responsible for configuring replication, while the `StatefulSet` provides the stable identities, network names and persistent storage that make this architecture possible.
+
+> [!IMPORTANT]
+>
+> A StatefulSet provides stable identity and storage, but it does not provide database replication, backup, consistency or disaster recovery.  
+> These capabilities must be provided by the application/database or by additional Kubernetes/storage components.
+
+```text
+mysql-0  -> primary
+mysql-1  -> replica
+mysql-2  -> replica
+```
+
+This does not mean that Kubernetes itself makes mysql-0 the primary. The database software must implement this logic.
+
+A `Deployment` does not guarantee stable Pod identities, ordered deployment, or dedicated persistent storage for each source or replica; moreover, if the source pod crashed and gets recreated, it will be assigned a new Pod name, hostname and IP.
+
+The manifest of a `StatefulSet` is similiar to the one of a `Deployment`.
+
+```yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+spec:
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - name: mysql
+        image: mysql
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mysql
+  serviceName: mysql-h
+  volumeClaimTemplates:
+  - metadata:
+      name: mysql-data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
+```
+
+A StatefulSet does not require `volumeClaimTemplates`. They are used when each Pod needs its own persistent storage (see later).
+
+When scaling up a `StatefulSet`, each new created pod has to be in running and ready state before the next pod is deployed.  
+This is useful for example when scaling a MySql DBMS, where each new instance can clone from the previous one.  
+It works in reverse order when scaling down: the last instance is removed first, followed by the second last one.  
+The same is true on termination: when deleting a `StatefulSet`, the pods are dewleted in reverse order.  
+Anyway, this is the default behaviour of Stateful Sets, which we can override to not follow an ordered launch but still have the other benefits of a stateful sets (like a stable and unique network ID). For that we need to set `spec.podManagementPolicy` to `Parallel` (the default is `OrderedReady`).
+
+#### Headless Service in Stateful Sets
+
+StatefulSets typically use a Headless `Service` to provide stable network identities and DNS records for individual Pods.  
+This because an Headless `Service`:
+
+- does not load-balance traffic;
+- does not allocate a ClusterIP;
+- provides a stable DNS record for every `Pod` instead of a single virtual IP, allowing each `Pod` to be reached individually.
+
+Instead of providing a single ClusterIP, DNS for a Headless `Service` resolves to the IP addresses of its Pods, formed as `<pod_name>.<headless_service_name>.<namespace>.<cluster_domain>`.  
+This is particularly useful for clustered databases such as MySQL, PostgreSQL, Cassandra, ZooKeeper or Kafka, where each node must be individually addressable.
+
+```text
+
+           Headless Service
+                mysql-h
+                    │
+      ┌─────────────┼─────────────┐
+      │             │             │
+mysql-0         mysql-1       mysql-2
+      │             │             │
+10.0.1.15     10.0.1.22     10.0.1.30
+
+mysql-0.mysql-h.default.svc.cluster.local ──► 10.0.1.15
+
+mysql-1.mysql-h.default.svc.cluster.local ──► 10.0.1.22
+
+mysql-2.mysql-h.default.svc.cluster.local ──► 10.0.1.30
+```
+
+A Headless Service is created by setting `clusterIP: None`.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-h
+spec:
+  clusterIP: None
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
+```
+
+For ordinary Pods, Kubernetes creates per-Pod DNS records only if the optional `hostname` and `subdomain` fields are specified.
+
+```yaml
+spec:
+  subdomain: mysql-h
+  hostname: mysql-pod
+```
+
+With StatefulSets, this configuration is performed automatically:
+
+- the Pod hostname is the Pod name (`mysql-0`, `mysql-1`, ...);
+- the subdomain is taken from `.spec.serviceName`, which must reference the Headless Service.
+
+#### Storage in Stateful Sets
+
+The `volumeClaimTemplates` will provide stable storage using PersistentVolumes provisioned by a `PersistentVolume` Provisioner.  
+Unlike `Deployments`, where Pods may share or recreate storage arbitrarily, every `StatefulSet` `Pod` keeps its own dedicated volume even if it is rescheduled to another node.
+
+```text
+    Headless Service
+            │
+   ┌────────┼───────┐
+   │        │       │
+mysql-0  mysql-1  mysql-2
+   │        │       │
+ PVC-0    PVC-1   PVC-2
+   │        │       │
+ PV-0      PV-1    PV-2
+```
+
+The automatic PersistentVolumeClaims allows StatefulSets to automatically create one `PersistentVolumeClaim` for each Pod.  
+Instead of manually creating PVCs, we define a `volumeClaimTemplates` section; then, every Pod receives its own dedicated `PersistentVolumeClaim`.
+
+Example:
+
+```yaml
+volumeClaimTemplates:
+- metadata:
+    name: data
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: 5Gi
+```
+
+If the StatefulSet has three replicas, Kubernetes automatically creates:
+
+```text
+data-mysql-0
+
+data-mysql-1
+
+data-mysql-2
+```
+
+Each Pod keeps its own PVC, and Kubernetes reattaches the corresponding volume when the Pod is recreated or rescheduled, provided that the storage backend supports the required topology and access mode.
+
+#### Deployment vs StatefulSet
+
+Unlike in `Deployments`, Pods belonging to a `StatefulSet` are not interchangeable. Each Pod keeps its own identity, storage and network name across restarts.
+
+| Feature               | Deployment         | StatefulSet          |
+| --------------------- | ------------------ | -------------------- |
+| Stable Pod names      | :x:                | :white_check_mark:   |
+| Stable DNS names      | :x:                | :white_check_mark:   |
+| Dedicated PVC per Pod | :x:                | :white_check_mark:   |
+| Ordered startup       | :x:                | :white_check_mark: ¹ |
+| Ordered termination   | :x:                | :white_check_mark: ¹ |
+| Parallel replicas     | :white_check_mark: | Optional             |
+| Stateless apps        | :white_check_mark: | :warning:            |
+| Stateful apps         | :warning: ²        | :white_check_mark:   |
+
+¹ Default behavior; can be changed with `podManagementPolicy: Parallel`.  
+² Databases and other stateful workloads → commonly `StatefulSet`.
 
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
