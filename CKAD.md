@@ -4557,6 +4557,71 @@ Unlike in `Deployments`, Pods belonging to a `StatefulSet` are not interchangeab
 ¹ Default behavior; can be changed with `podManagementPolicy: Parallel`.  
 ² Databases and other stateful workloads → commonly `StatefulSet`.
 
+## Security
+
+> [!Note]
+>
+> This chapter on Security is not mandatory for the official CKAD exam.
+> It's instead in the scope of the official CKA and CKS certifications.
+
+### Kubernetes Security Primitives
+
+Being Kubernetes a production-ready platform to host applications, security is one of prime concerns.
+
+It is vital to **secure the Underlying Hosts**, so the physical or virtual hosts that form the cluster. Ensure all host access is protected by:
+
+- disabling root access;
+- disabling password-based authentication;
+- enforcing SSH key-based authentication;
+- implementing other critical security measures.
+
+The first line of defense is controlling access to the kube-apiserver itself.  
+We need to make two type of decisions:
+
+- who can access the cluster: defined through the **authentication mechanism** like certificates, tokens, ServiceAccounts (for machines), external authentication providers (like LDAP);
+- what can they do: defined through **authorization mechanism** like RBAC, ABAC (where A stand for attributes), Node Authorization, Webhook Mode.
+
+Then, all **communication with the different components of the cluster from the kube-apiserver** is secured by TLS encryption.
+
+For **communication between the cluster**, we already seen that By default, all pods can access all other pods between the cluster but we can restrict access between them using **NetworkPolicies**.
+
+## Authentication
+
+Our concern is to manage authentication for users (cluster administrators and developers) and Service Accounts.
+
+Kubernetes does not manage user accounts natively.  
+So we cannot create or view the list of users with the KubeCTL.  
+It instead, relies on external sources like:
+
+- Static password and token files (with tokens and user details);
+- certificates;
+- third-party authentication protocols (identity providers like LDAP, Kerberos, etc.);
+
+This is different for ServiceAccounts: in this case you can manage them via the API.
+
+Focusing on users, all user access is managed by the `kube-apiserver`, whether accessing the cluster throught:
+
+- the `kubectl`;
+- the API directly (like `curl https://kube-server-ip:6443/`).
+
+In the approach with static password and token files, we have CSV files like the following one `user-token-details.csv`:
+
+```csv
+token,user,uid,groups
+"v7f89as7df89as7df89as7","mario.rossi","1001","developers,engineering"
+"9a8b7c6d5e4f3g2h1i0jkl","giulia.bianchi","1002","administrators,security"
+"z1x2c3v4b5n6m7q8w9e0rt","luca.verdi","1003","viewers,analytics"
+"p0o9i8u7y6t5r4e3w2q1as","app-service-account","2001","system-agents"
+```
+
+with this you can specify the token as an authorization bearer to the request
+
+```bash
+curl -v -k https://master-node-ip:6443/api/v1/pods --header "Authorization: Bearer v7f89as7df89as7df89as7"
+```
+
+This method is not a recommended authorization mechanism because it stores tokens or password in clear text.
+
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
 The exam lasts 2 hours and typically includes around 15–20 performance-based tasks.
