@@ -4622,6 +4622,204 @@ curl -v -k https://master-node-ip:6443/api/v1/pods --header "Authorization: Bear
 
 This method is not a recommended authorization mechanism because it stores tokens or password in clear text.
 
+### KubeConfig
+
+When communicating with a Kubernetes cluster, authentication and connection parameters may need to be provided to both `kubectl` and `curl`.  
+For example:
+
+```bash
+curl https://my-kube-playground:6443/api/v1/pods \
+  --key admin.key \
+  --cert admin.crt \
+  --cacert ca.crt
+```
+
+```bash
+kubectl get pods \
+  --server https://my-kube-playground:6443 \
+  --client-key admin.key \
+  --client-certificate admin.crt \
+  --certificate-authority ca.crt
+```
+
+In order to avoid to type all those each time, we can move this information to a configuration file called `kubeconfig` and specify only this one with the `kubeconfig` option in the command.
+
+```bash
+kubectl get pods \
+  --kubeconfig config
+```
+
+By default, the `kubectl` tool looks for the file `~/.kube/config`.  
+So, if the file is placed there, we don't have to specify the path to that file each time.  
+This default can be overridden by setting the `KUBECONFIG` environment variable, which specifies the kubeconfig file(s) to use.
+
+```bash
+kubectl get pods
+```
+
+That's the reason we didn't have to specify any options for our `kubectl` commands so far.
+
+A kubeconfig file has a specific structure and mainly contains three collections:
+
+- **Clusters**: the Kubernetes clusters that we need access to (for example, different environments, organizations or cloud providers);
+- **Users**: the identities or credentials used to authenticate to those clusters;
+- **Contexts**: define which user accesses which cluster and, optionally, which namespace is used by default.
+
+Using a kubeconfig compared to using the parameters in the commands performed above:
+
+- the server specification (`--server` or URL on curl) and CA certificate (`--certificate-authority` or `--cacert` on curl) go in the cluster section;
+- the users keys (`--client-key` or `--key` on curl) and certificates (`--client-certificate` or `--cert` on curl) go into the user section;
+- the association of them in the command you perform is the context.
+
+```text
+Cluster
+  └── server + CA
+
+User
+  └── client certificate + client key
+
+Context
+  └── Cluster + User + Namespace
+```
+
+Here is an example of real kubeconfig file
+
+```yaml
+apiVersion: v1
+kind: Config
+
+clusters:
+- name: development
+  cluster:
+    server: https://development.example.com:6443
+    certificate-authority: /etc/kubernetes/pki/development/ca.crt
+- name: my-kube-playground
+  cluster:
+    server: https://my-kube-playground.example.com:6443
+    certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUIwekNDQVhTZ0F3SUJBZ0lSQU5DNE5qczJiWG8w
+- name: production
+  cluster:
+    server: https://production.example.com:6443
+    certificate-authority: /etc/kubernetes/pki/production/ca.crt
+- name: google
+  cluster:
+    server: https://google.example.com:6443
+    certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURYVENDQWtHZ0F3SUJBZ0lKQUwxYzJ2O
+
+users:
+- name: admin
+  user:
+    client-certificate: admin.crt
+    client-key: admin.key
+- name: my-kube-admin
+  user:
+    token: <token>
+- name: dev-user
+  user:
+    token: <token>
+
+contexts:
+- name: admin@production
+  context:
+    cluster: production
+    user: admin
+- name: my-kube-admin@my-kube-playground
+  context:
+    cluster: my-kube-playground
+    user: my-kube-admin
+- name: dev@google
+  context:
+    cluster: google
+    user: dev-user
+    namespace: invoicing
+
+current-context: admin@production
+```
+
+> [!Note]
+>
+> The CA of the destination server can be specified:
+>
+> - as a path to a certificate file, with the `certificate-authority` field;  
+> - directly in the kubeconfig as a base64-encoded value, with the `certificate-authority-data` field.
+
+![kubeconfig: clusters, context and users.png](./images/kubeconfig-clusters-context-users.png "kubeconfig contents")
+
+```mermaid
+flowchart LR
+
+    subgraph C["Clusters"]
+        C1["Development"]
+        C2["MyKubePlayground"]
+        C3["Production"]
+        C4["Google"]
+    end
+
+    subgraph CT["Contexts"]
+        CT1["Admin@Production"]
+        CT2["MyKubeAdmin@MyKubePlayground"]
+        CT3["Dev@Google"]
+    end
+
+    subgraph U["Users"]
+        U1["Admin"]
+        U2["MyKubeAdmin"]
+        U3["Dev User"]
+        U4["Prod User"]
+    end
+
+    CT1 -->|cluster| C3
+    CT1 -->|user| U1
+
+    CT2 -->|cluster| C2
+    CT2 -->|user| U2
+
+    CT3 -->|cluster| C4
+    CT3 -->|user| U3
+
+    K["current-context"] --> CT1
+```
+
+```text
+Clusters                  Contexts                           Users
+
+Development
+
+MyKubePlayground ◄──────── MyKubeAdmin@MyKubePlayground ───► MyKubeAdmin
+
+Production ◄────────────── Admin@Production ───────────────► Admin
+
+Google ◄────────────────── Dev@Google ─────────────────────► Dev User
+
+                                                             Prod User
+```
+
+As you can notice, there is also a `current-context` field inside the kubeconfig.  
+It tells `kubectl` which context to use by default when no other context is explicitly specified.
+
+The `current-context` field is optional.
+
+Useful commands:
+
+- `kubectl config view`: view the configuration of the currently used kubeconfig file;
+- `kubectl config view --kubeconfig=mycustom-config`: view the configuration of a specific kubeconfig file;
+- `kubectl config get-clusters`: list the clusters available;
+- `kubectl config get-users`: list the users available;
+- `kubectl config get-contexts`: list the contexts available;
+- `kubectl config current-context`: view the current context being used;
+- `kubectl config use-context <context-name>`: change the current context of the current kubeconfig file.
+
+```console
+$ kubectl config current-context
+admin@production
+
+$ kubectl config use-context dev@google
+Switched to context "dev@google".
+
+$ kubectl config current-context
+dev@google
+```
+
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
 The exam lasts 2 hours and typically includes around 15–20 performance-based tasks.
