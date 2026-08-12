@@ -85,10 +85,6 @@ Useful commands:
 - `kubectl describe`: show details of a specific resource or group of resources;
 - `kubectl create -f <file-name>`: creates the resources specified inside the file;
 - `kubectl replace --force f <filename>`: deletes and recreates the resources specified inside the file;
-- `kubectl api-resources`: lists all resources (especially useful when you can't find a resource on the documentation pages);
-- `kubectl explain <resource name>`: gives details on the Kind and lists the top level fields and their type;
-- `kubectl explain <resource name>.<field name>`: gives details on the Kind and lists the subfields and their type;
-- `kubectl explain <resource name> --recursive`: lists all fields that we would put in the yaml file;
 - `kubectl get all --no-headers`: list all the objects created in the default namespace, without printing the header line;
 - `kubectl get all -A`: list all the objects in all namespaces;
 - `kubectl <command> [subcommand] --help`: gives information about the current command and subcommand, included the different available parameters;
@@ -4559,11 +4555,6 @@ Unlike in `Deployments`, Pods belonging to a `StatefulSet` are not interchangeab
 
 ## Security
 
-> [!Note]
->
-> This chapter on Security is not mandatory for the official CKAD exam.
-> It's instead in the scope of the official CKA and CKS certifications.
-
 ### Kubernetes Security Primitives
 
 Being Kubernetes a production-ready platform to host applications, security is one of prime concerns.
@@ -4819,6 +4810,217 @@ Switched to context "dev@google".
 $ kubectl config current-context
 dev@google
 ```
+
+### API Groups
+
+Whatever operations we have performed so far with the cluster, we have been interacting with the Kubernetes API Server, either through the `kubectl` utility or directly through its REST API. For example:
+
+- for checking the version we can use `curl https://kube-master:6443/version`;
+- for many operations, we use the path `/api`, for example `curl https://kube-master:6443/api/v1/pods`;
+- for many other operations, we need to use the path `/apis`, for example `curl https://kube-master:6443/apis/apps/v1/deployments`.
+
+The Kubernetes API is organized into API groups, which provide a way to logically group related resources and make the API easier to extend.  
+API groups are accessible via API paths in the following way:
+
+- `/api`: the API path for the core API group `/api/v1`, which contains resources such as `Pods`, `Services`, `Nodes`, `Namespaces`, `ConfigMaps`, `Secrets`, `PersistentVolumes` and `PersistentVolumeClaims`;
+- `/apis`: the API path that containes named API groups, which organize related resources. It has groups like:
+  - `/apps/v1`: `Deployments`, `ReplicaSets`, `StatefulSets`;
+  - `/batch/v1`: `Jobs`, `CronJobs`;
+  - `/networking.k8s.io/v1`: `NetworkPolicies`, `Ingress`;
+  - `/storage.k8s.io/v1`: `StorageClasses`;
+  - `/authentication.k8s.io/v1`: authentication-related APIs;
+  - `/rbac.authorization.k8s.io`: `Roles`, `RoleBindings`, `ClusterRoles`, `ClusterRoleBindings`;
+  - `/certificates.k8s.io/v1`: `CertificateSigningRequests`;
+- Other API server endpoints (that are not API groups neither group them) like:
+  - `/version`: to view the version of the cluster;
+  - `/healthz`: monitor the health of the cluster;
+  - `/metrics`: retrieve metrics on the cluster;
+  - `/logs`: provides access to log files exposed by the API server.
+
+> [!CAUTION]
+>
+> Not every endpoint exposed by the API server represents a Kubernetes API group.  
+> For example, `/version`, `/metrics` and `/healthz` are non-resource endpoints.
+
+The resources are exposed through `/api` and `/apis` API paths.
+
+| Component        | URI                                  |
+| ---------------- | ------------------------------------ |
+| Core API groups  | `/api/<version>/<resource>`          |
+| Named API groups | `/apis/<group>/<version>/<resource>` |
+| Other endpoints  | `/<endpoint>`                        |
+
+> [!NOTE]
+>
+> Keep in mind that **resource** and **kind** are not the same thing. For example:
+>
+> ```text
+> Resource: deployments
+> Kind:     Deployment
+> ```
+>
+> the command `kubectl api-resources` highlights this difference
+>
+> ```console
+> $ kubectl api-resources
+> NAME           SHORTNAMES   APIVERSION              NAMESPACED   KIND
+> pods           po           v1                      true         Pod
+> services       svc          v1                      true         Service
+> deployments    deploy       apps/v1                 true         Deployment
+> statefulsets   sts          apps/v1                 true         StatefulSet
+> jobs           job          batch/v1                true         Job
+> ingresses      ing          networking.k8s.io/v1    true         Ingress
+> nodes          no           v1                      false        Node
+> ```
+
+| Kind                  | Resource               | API group         | API version | API path                                     |
+| --------------------- | ---------------------- | ----------------- | ----------- | -------------------------------------------- |
+| Pod                   | pods                   | core              | v1          | `/api/v1/pods`                               |
+| Service               | services               | core              | v1          | `/api/v1/services`                           |
+| Deployment            | deployments            | apps              | v1          | `/apis/apps/v1/deployments`                  |
+| StatefulSet           | statefulsets           | apps              | v1          | `/apis/apps/v1/statefulsets`                 |
+| NetworkPolicy         | networkpolicies        | networking.k8s.io | v1          | `/apis/networking.k8s.io/v1/networkpolicies` |
+| PersistentVolumeClaim | persistentvolumeclaims | core              | v1          | `/api/v1/persistentvolumeclaims`             |
+| StorageClass          | storageclasses         | storage.k8s.io    | v1          | `/apis/storage.k8s.io/v1/storageclasses`     |
+
+```text
+Kubernetes API Server
+│
+├── API discovery / resource APIs
+│   ├── /api/v1
+|   |        ├── pods
+|   |        ├── services
+|   |        ├── namespaces
+|   |        ├── configmaps
+|   |        ├── secrets
+|   |        ├── nodes
+|   |        └── ...
+│   │
+│   └── /apis
+│       ├── /apps/v1
+│       ├── /batch/v1
+│       ├── /networking.k8s.io/v1
+│       ├── /storage.k8s.io/v1
+│       ├── /authentication.k8s.io/v1
+│       ├── /certificates.k8s.io/v1
+│       └── ...
+│
+└── Other API server endpoints
+    ├── /version
+    ├── /healthz
+    ├── /metrics
+    ├── /logs
+    └── ...
+```
+
+You can discover the available API groups through the API Server itself, normally with the commands:
+
+- `curl https://localhost:6443 -k`;
+- `curl https://localhost:6443/api -k`;
+- `curl https://localhost:6443/apis -k`;
+
+and if you want to check a specific API, you can perform `curl https://localhost:6443/apis/apps/v1 -k`.
+
+In order to avoid specifying authentication parameters, you can start a kubectl-proxy with the command
+
+```bash
+kubectl proxy
+```
+
+and then perform commands like:
+
+- `curl http://localhost:8001`;
+- `curl http://localhost:8001/api`;
+- `curl http://localhost:8001/apis`.
+
+and you can finally get specific information on a single API with a command like `curl http://localhost:8001/apis/apps/v1`.
+
+> [!TIP]
+>
+> `kubectl proxy` starts a local proxy that forwards requests to the Kubernetes API server.  
+> By default, it listens on `127.0.0.1:8001` and uses the current kubeconfig context to determine how to connect to the API server.
+> Using this proxy, we don't have to specify credentials and certificates in each curl command.
+
+The API group and version are also reflected in the `apiVersion` field of Kubernetes objects:
+
+- Core API group, uses `apiVersion: v1`
+
+  ```yaml
+  apiVersion: v1
+  kind: Pod
+  ```
+
+- Named API group, uses `apiVersion: <group>/<version>`
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: Deployment
+  ```
+
+> [!CAUTION]
+>
+> The API group and API version are separate concepts.  
+> For example, `apps/v1` refers to the `apps` API group and its `v1` version.  
+> For resources in the core API group, the group name is omitted and only the version is specified, such as `v1`.
+
+Each resource supports a set of operations, commonly referred to as Kubernetes verbs, such as `get`, `list`, `create`, `update`, `patch`, `delete` and `watch`.
+
+> [!NOTE]
+>
+> Kubernetes verbs should not be confused with HTTP methods.  
+> For example
+>
+> - `kubectl get pods` uses the Kubernetes `get` verb, which is implemented through an HTTP `GET` request;
+> - `kubectl create deployment ...` uses the Kubernetes `create` verb and is implemented using an HTTP `POST` request;
+> - `watch` is implemented using an HTTP `GET` request with the `?watch=true` parameter.
+
+To summarize:
+
+- the Kubernetes API Server exposes Kubernetes resources through API groups;
+- at the top level we have a core API group (exposed through `/api`) and named API groups (exposed through `/apis`);
+- under the named API groups we have one API group for each API section;
+- each API group can have one or more API versions;
+- each API version exposes one or more resources;
+- resources support operations (Kubernetes verbs) such as `get`, `list`, `create`, `update`, `patch`, `delete` and `watch`.
+
+```text
+                     Kubernetes API Server
+                              │
+                ┌─────────────┴───────────────┐
+                │                             │
+           Core API group                Named API groups
+              /api                          /apis
+                │                             │
+               v1                    ┌────────┼────────────────┐
+                │                    │        │                │
+        ┌───────┼────────┐        apps/v1   batch/v1   networking.k8s.io/v1
+        │       │        │           │        │                │
+       pods  services  configmaps    v1       v1               v1
+                                     │
+                                deployments
+                                     │
+                               Kubernetes verbs
+                         ┌───────────┼───────────┐
+                        get        create       delete
+```
+
+```text
+API group
+    │
+    └── API version
+            │
+            └── Resource
+                    │
+                    └── Operations / verbs
+```
+
+Useful commands:
+
+- `kubectl api-versions`: show available API group and version;
+- `kubectl api-resources`: show available resources and the corresponding API group (especially useful when you can't find a resource on the documentation pages);
+- `kubectl explain <resource name>`: gives details on the Kind and lists the top level fields and their type;
+- `kubectl explain <resource name>.<field name>`: gives details on the Kind and lists the subfields and their type;
+- `kubectl explain <resource name> --recursive`: lists all fields that we would put in the yaml file.
 
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
