@@ -1,5 +1,7 @@
 # CKAD Certification
 
+---
+
 ## Architecture
 
 A Node is a machine (physical or virtual) and can be:
@@ -77,6 +79,8 @@ Then, then Command Line Tool is the `kubectl` (also called Kube Control).
 > The Master Node is the physical or virtual server (or servers) where those Control Plane software components are actually running.  
 > Think of the Control Plane as the mind, and the Master Node as the physical body that houses it.
 
+---
+
 ## Various
 
 Useful commands:
@@ -88,9 +92,12 @@ Useful commands:
 - `kubectl get all --no-headers`: list all the objects created in the default namespace, without printing the header line;
 - `kubectl get all -A`: list all the objects in all namespaces;
 - `kubectl <command> [subcommand] --help`: gives information about the current command and subcommand, included the different available parameters;
-- `kubectl edit <resource> <resource name>` edit manifest of a resource on-the-fly.
+- `kubectl edit <resource> <resource name>`: edit manifest of a resource on-the-fly;
+- `kubectl <verb> <resource> --no-headers | wc -l`: count the number of objects returned.
 
 The configuration file of a Kubernetes object (derived from a Kind) is called "manifest".
+
+---
 
 ## Pod
 
@@ -214,6 +221,8 @@ spec:
 
 However, there are other ways of setting environment values in Kubernetes, such as injecting them through ConfigMaps and Secrets, which we'll see later.
 
+---
+
 ## ReplicaSet
 
 This is the structure of a `ReplicaSet` yaml manifest
@@ -273,6 +282,8 @@ There are also options to automatically scale the replicas based on the load, bu
 >
 > Deployments should be preferred when controlled rolling updates or rollbacks are required.
 
+---
+
 ## Deployment
 
 The `Deployment` is "higher in hierarchy" compared to `ReplicaSet` and `ReplicationController`.  
@@ -329,6 +340,8 @@ Useful commands:
 > Since the pod template is a child of the deployment specification, with every change the deployment will automatically delete and create a new pod with the new changes.  
 > So if you are asked to edit a property of a POD part of a deployment you may do that simply by running the command `kubectl edit deployment <deployment name>`.
 
+---
+
 ## Namespace
 
 The `Namespace` is the logical segmentation of Kubernetes clusters.  
@@ -357,6 +370,8 @@ Some commands:
 - `kubectl get pod --all-namespaces`: retrieves all the pods in all the namespaces;
 - `kubectl get service -A`: retrieves all the services in all the namespace;
 - `kubectl get service -n [namespace name]`: retrieves all the services in a specific namespace (if not specified, the default namespace will be used).
+
+---
 
 ## Service
 
@@ -520,6 +535,8 @@ Some commands:
 - `kubectl get services`: list the services with their status inside the default namespace;
 - `kubectl describe service <service name>`: shows detailed information about the service, listing the associated `Endpoints`.
 
+---
+
 ## Imperative commands
 
 While you would be working mostly using the declarative commands (using definition files), imperative commands can help in getting one-time tasks done quickly, as well as generate a definition template easily.  
@@ -580,6 +597,8 @@ Both the above commands have their own challenges.
 While one of it cannot accept a selector, the other cannot accept a nodeport.  
 I would recommend going with the `kubectl expose` command, and then manually input the nodeport in the manifest file before creating the service.
 
+---
+
 ## Formatting Output with kubectl
 
 The default output format for all kubectl commands is the human-readable plain-text format.  
@@ -595,6 +614,8 @@ Here are some of the commonly used formats:
 - `-o name`: print only the resource name and nothing else;
 - `-o wide`: output in the plain-text format with additional information;
 - `-o yaml`: output a YAML formatted API object.
+
+---
 
 ## ConfigMaps
 
@@ -669,6 +690,8 @@ spec:
 ```
 
 And then create the pod with `kubectl create -f pod-definition.yaml`.
+
+---
 
 ## Secrets
 
@@ -802,6 +825,8 @@ spec:
 ```
 
 And then create the pod with `kubectl create -f pod-definition.yaml`.
+
+---
 
 ## Other options to inject ConfigMaps and Secrets
 
@@ -1028,6 +1053,8 @@ Pod restart required           Files automatically updated
 > Use a normal ConfigMap Volume when you want configuration updates to be propagated automatically to a running Pod.  
 > Use `subPath` when you need to mount a single file to a specific location in the container's filesystem, but remember that updates to the ConfigMap will **not** be reflected until the Pod is recreated.
 
+---
+
 ## Security Context
 
 A security context defines privilege and access control settings for a Pod or Container. The most common are:
@@ -1105,6 +1132,8 @@ If you want to check the user running a process, you can:
 - list the processes with the `ps aux` command from the host machine;
 - print the current user ID, group ID and belonging groups `kubectl exec [pod name] -- id`.
 - print the current username `kubectl exec [pod name] -- whoami`.
+
+---
 
 ## Resource requirements
 
@@ -1272,6 +1301,8 @@ spec:
     limits.memory: 10Gi
 ```
 
+---
+
 ## Service Accounts
 
 A service account is a type of non-human account that, in Kubernetes, provides a distinct identity in a Kubernetes cluster.
@@ -1295,6 +1326,8 @@ Some commands:
 - `kubectl create serviceaccount dashboard-sa`: creates a ServiceAccount inside the default namespace;
 - `kubectl get serviceaccount`: list the ServiceAccounts inside the default namespace;
 - `kubectl describe serviceaccount dashboard-sa`: gives details of a ServiceAccount inside the default namespace.
+
+---
 
 ### The default ServiceAccount
 
@@ -1320,6 +1353,8 @@ The default `ServiceAccount` is automatically mounted unless explicitly disabled
 >
 > By default, the `default` ServiceAccount has very limited permissions.  
 > What it can do depends on the RBAC roles bound to it.
+
+---
 
 ### Using a custom ServiceAccount
 
@@ -1366,6 +1401,8 @@ ca.crt  namespace  token
 > A Pod can reference a ServiceAccount only at creation time.
 >
 > To change the ServiceAccount, recreate the Pod or update the Deployment so that a new rollout is triggered.
+
+---
 
 ### ServiceAccount token
 
@@ -1436,6 +1473,8 @@ metadata:
 > - we cannot use the `TokenRequest` API to obtain a token and
 > - the security exposure of persisting non-expiring token credential is acceptable.
 
+---
+
 ### A preview about RBAC, Role, RoleBinding
 
 If you try to check if the token has the right to query the Kubernetes API with the command
@@ -1446,7 +1485,7 @@ kubectl auth can-i get pods --as=system:serviceaccount:default:dashboard-sa
 
 you will receive a `no` as a response, because no permissions has assigned to it.
 
-If, instead, you create a Role and assign it with a RoleBinding
+If, instead, you create a `Role` and assign it with a `RoleBinding`
 
 ```yaml
 ---
@@ -1478,8 +1517,8 @@ subjects:
   name: dashboard-sa # Name is case sensitive
   namespace: default
 roleRef:
-  kind: Role #this must be Role or ClusterRole
-  name: pod-reader # this must match the name of the Role or ClusterRole you wish to bind to
+  kind: Role # must be Role or ClusterRole
+  name: pod-reader # must match the name of the Role or ClusterRole you wish to bind to
   apiGroup: rbac.authorization.k8s.io
 ```
 
@@ -1509,7 +1548,9 @@ RBAC
 Allowed / Denied
 ```
 
-This topic will be covered covered in more detail later.
+This topic will be covered in more detail later.
+
+---
 
 ### Manually mount a ServiceAccount token
 
@@ -1517,6 +1558,8 @@ You manually mount a ServiceAccount token by disabling automatic mounting of API
 
 TODO: Complete this section.
       Check the last part of the lab on ServiceAccount.
+
+---
 
 ### Evolution of ServiceAccount tokens
 
@@ -1546,6 +1589,8 @@ You must run the command `kubectl create token dashboard-sa` to generate a token
 | ≤1.21   | Secret containing a long-lived token automatically created |
 | 1.22    | TokenRequest API introduced                                |
 | ≥1.24   | Secret no longer automatically created                     |
+
+---
 
 ## Taints and Tolerations
 
@@ -1655,6 +1700,8 @@ A toleration "matches" a taint if the keys are the same and the effects are the 
 > If `the` key is empty, then the `operator` must be `Exists`, which matches all keys and values. Note that the `effect` still needs to be matched at the same time.
 >
 > An empty `effect` matches all effects with key `key1`.
+
+---
 
 ## Node Selectors and Node Affinity
 
@@ -1772,6 +1819,8 @@ We don't need the value set in this snippet as the `Exists` operator does not co
 | NOT conditions       | :x:                | :white_check_mark: |
 | Preferred scheduling | :x:                | :white_check_mark: |
 
+---
+
 ## Multi-Container Pods and InitContainers
 
 A Pod can contain more than one container.  
@@ -1861,7 +1910,11 @@ spec:
     restartPolicy: Always
 ```
 
+---
+
 ## Observability
+
+---
 
 ### Pod Status, Pod Phases and Pod Conditions
 
@@ -1999,6 +2052,8 @@ However, many applications need additional time to initialize before they are ac
 Without a readiness probe, Kubernetes considers the container ready as soon as it starts, so Services may begin routing traffic to an application that is still initializing.  
 Readiness probes solve this problem by tying the Pod's `Ready` condition to the actual health of the application.
 
+---
+
 ### Readiness and Liveness Probes
 
 As a developer of the application, you know better what it means for the application to be ready.
@@ -2094,6 +2149,8 @@ Similarly to readiness probes, we have:
 > | Readiness  | Can receive traffic? |
 > | Liveness   | Should be restarted? |
 
+---
+
 ### Monitoring, Logging, and Debugging
 
 Kubernetes provides several commands to inspect logs, monitor resource usage and troubleshoot applications.
@@ -2164,6 +2221,8 @@ Without the Metrics Server installed, commands such as `kubectl top pod` and `ku
 > It is **not** a full monitoring solution and does not store historical metrics because it keeps metrics only in memory and does not persist them to disk.
 >
 > For long-term monitoring and alerting, tools such as Prometheus and Grafana are typically used.
+
+---
 
 ## Labels, Selectors and Annotations
 
@@ -2287,6 +2346,8 @@ spec:
   - name: nginx-container
     image: nginx:1.21.6
 ```
+
+---
 
 ## Deployment Updates and Rollback
 
@@ -2643,6 +2704,8 @@ Here are some handy examples related to updating a Kubernetes Deployment:
     Normal  ScalingReplicaSet  9s (x2 over 47s)   deployment-controller  Scaled down replica set nginx-6884758f6f from 1 to 0
   ```
 
+---
+
 ### Additional Deployment strategies
 
 Besides the built-in Deployment strategies (`RollingUpdate` and `Recreate`), there are other application deployment strategies commonly used in production, such as:
@@ -2788,6 +2851,8 @@ A service mesh such as Istio allows routing traffic based on explicit percentage
 | RollingUpdate | No       | Progressive      | Automatic (`rollout undo`) |
 | Blue-Green    | No       | Immediate switch | Very fast                  |
 | Canary        | No       | Progressive      | Very fast                  |
+
+---
 
 ## Jobs and CronJobs
 
@@ -3114,7 +3179,11 @@ Other common optional parameters for CronJobs are:
 | Job        | :x:                | :white_check_mark: | :x:                |
 | CronJob    | :x:                | :white_check_mark: | :white_check_mark: |
 
+---
+
 ## Network policies
+
+---
 
 ### Description of Ingress and Egress in non Kubernetes environments
 
@@ -3171,6 +3240,8 @@ If we should list the necessary rules to make this system work, we would have:
 - an egress rule to allow traffic to port 3306 on the database server;
 - an ingress rule on the DataBase server to accept traffic on the port 3306.
 
+---
+
 ### Need of Network Policies for Kubernetes environments
 
 In Kubernetes, each `Node`, `Pod` and `Service` has its own IP address.  
@@ -3193,6 +3264,8 @@ Coming back to the example made in the previous paragraph, in order to reach tha
 
 but considering that by default all pods can talk to each other, in this way the front-end pod is able to communicate directly with the database pod.  
 If we want to avoid that (maybe the security team or an audit required to prevent that to happening), that is where we would implement a **Network Policy** to allow traffic to the DB server only from the API server.
+
+---
 
 ### Network Policies in Kubernetes environments
 
@@ -3395,7 +3468,11 @@ Useful commands:
 - `kubectl get networkpolicies`: same as above;
 - `kubectl describe netpol <NetworkPolicy name>`: returns details about a specific NetworkPolicy.
 
+---
+
 ## Ingress Networking
+
+---
 
 ### Why do we need Ingress instead of exposing Services directly ?
 
@@ -3582,6 +3659,8 @@ Kubernetes Cluster           |
 > An Ingress resource is only a set of routing rules stored in Kubernetes and does not receive network traffic by itself.  
 > An Ingress Controller (such as NGINX Ingress Controller or Traefik) is the component responsible for implementing those rules.
 
+---
+
 ### Ingress and Ingress Controller
 
 Think of ingress as a Layer 7 LoadBalancer built into the Kubernetes cluster that can be configured using native Kubernetes primitives.
@@ -3601,6 +3680,8 @@ Out of these, NGINX and GCE are currently being supported and maintained by the 
 
 Keep in mind that the load balancer component is just a part of Ingress Controllers.  
 Ingress Controllers have additional intelligence to monitor the Kubernetes Cluster for definitions of ingress resources and configure the underlying proxy accordingly.
+
+---
 
 ### Simplified architecture of an Ingress Controller
 
@@ -3701,6 +3782,8 @@ kubectl create -f nginx-configuration.yaml
 kubectl create -f nginx-ingress.yaml
 kubectl create -f nginx-ingress-serviceaccount.yaml
 ```
+
+---
 
 ### Ingress resources
 
@@ -3882,6 +3965,8 @@ data:
 type: kubernetes.io/tls
 ```
 
+---
+
 ### IngressClass
 
 In modern Kubernetes clusters, multiple Ingress Controllers may coexist.
@@ -3959,6 +4044,8 @@ This depends on how the Ingress Controllers are configured.
 >
 > This annotation is now deprecated in favour of the ingressClassName field.
 
+---
+
 ### Additional options
 
 Different ingress controllers have different options that can be used to customise the way it works.
@@ -3987,9 +4074,15 @@ Useful commands:
 - `kubectl create ingress <ingress-name> --rule="host/path=service:port"`: template for creating an Ingress imperatively;
 - `kubectl create ingress ingress-test --rule="wear.my-online-store.com/wear*=wear-service:80"`: creates an Ingress that routes requests for `wear.my-online-store.com` whose path starts with `/wear` to the `wear-service` Service on port 80.
 
+---
+
 ## State Persistence: Storage, Volumes and StatefulSets
 
+---
+
 ### Storage in Docker
+
+---
 
 #### How Docker stores data
 
@@ -4004,6 +4097,8 @@ By default, Docker stores its local data under `/var/lib/docker` with the follow
           ├── image (data related to images)
           └── volumes (volumes data)
 ```
+
+---
 
 #### Docker layered filesystem
 
@@ -4029,11 +4124,15 @@ The writable container layer exists only for the lifetime of the container; when
       +-------------------------------+
 ```
 
+---
+
 #### Why we need volumes in Docker
 
 The writable layer is ephemeral. If the container is removed, all data stored in that layer disappears as well.  
 This is not suitable for persistent application data such as databases or uploaded files.  
 To persist data independently of the container lifecycle, Docker provides volumes.
+
+---
 
 #### Named volume vs bind mount
 
@@ -4057,6 +4156,8 @@ With `--mount`, the commands above can be rewritten as:
 - `docker run --mount type=volume,src=volume_name,dst=/var/lib/mysql,rw mysql` ;
 - `docker run --mount type=bind,source=/data/mysql,target=/var/lib/mysql mysql` .
 
+---
+
 #### Storage Drivers vs Volume Drivers
 
 At this point, it is important to distinguish between two different concepts:
@@ -4071,6 +4172,8 @@ Volumes instead, are not handled by storage drivers but **Volume driver plugins*
 Volume drivers are responsible only for managing volumes; they are independent from the storage driver used for image layers.  
 A Volume Driver plugin can also provision storage on external systems instead of using the local filesystem.  
 The default volume driver plugin is **Local** but there are many others that we can choose, including the cloud provider ones.
+
+---
 
 ### Volumes in Kubernetes
 
@@ -4141,6 +4244,8 @@ Anyway, the hostPath works fine if we are on a single node cluster; however, it 
 Kubernetes supports many storage backends, traditionally including NFS, Fibre Channel and cloud-provider block storage.  
 Modern Kubernetes clusters generally access these backends through CSI drivers.
 
+---
+
 ### Persistent Volumes
 
 In the previous examples we defined volumes inside Pod manifests.  
@@ -4204,6 +4309,8 @@ The Access Mode defines how a volume should be mounted on a host and can be:
       NFS / EBS / Azure Disk /
       Ceph / NetApp / CSI ...
 ```
+
+---
 
 ### Persistent Volume Claims
 
@@ -4284,6 +4391,8 @@ spec:
 
 The same is true for ReplicaSets or Deployments. Add this to the pod template section of a Deployment on ReplicaSet.
 
+---
+
 ### Storage Classes
 
 Before StorageClasses were introduced, persistent storage was usually statically provisioned.  
@@ -4355,6 +4464,8 @@ spec:
 | PVC binds existing PV   | PVC triggers provisioning  |
 | Manual management       | Automatic management       |
 | More operational effort | Recommended approach       |
+
+---
 
 ### Stateful Sets
 
@@ -4431,6 +4542,8 @@ It works in reverse order when scaling down: the last instance is removed first,
 The same is true on termination: when deleting a `StatefulSet`, the pods are dewleted in reverse order.  
 Anyway, this is the default behaviour of Stateful Sets, which we can override to not follow an ordered launch but still have the other benefits of a stateful sets (like a stable and unique network ID). For that we need to set `spec.podManagementPolicy` to `Parallel` (the default is `OrderedReady`).
 
+---
+
 #### Headless Service in Stateful Sets
 
 StatefulSets typically use a Headless `Service` to provide stable network identities and DNS records for individual Pods.  
@@ -4489,6 +4602,8 @@ With StatefulSets, this configuration is performed automatically:
 - the Pod hostname is the Pod name (`mysql-0`, `mysql-1`, ...);
 - the subdomain is taken from `.spec.serviceName`, which must reference the Headless Service.
 
+---
+
 #### Storage in Stateful Sets
 
 The `volumeClaimTemplates` will provide stable storage using PersistentVolumes provisioned by a `PersistentVolume` Provisioner.  
@@ -4535,6 +4650,8 @@ data-mysql-2
 
 Each Pod keeps its own PVC, and Kubernetes reattaches the corresponding volume when the Pod is recreated or rescheduled, provided that the storage backend supports the required topology and access mode.
 
+---
+
 #### Deployment vs StatefulSet
 
 Unlike in `Deployments`, Pods belonging to a `StatefulSet` are not interchangeable. Each Pod keeps its own identity, storage and network name across restarts.
@@ -4553,7 +4670,11 @@ Unlike in `Deployments`, Pods belonging to a `StatefulSet` are not interchangeab
 ¹ Default behavior; can be changed with `podManagementPolicy: Parallel`.  
 ² Databases and other stateful workloads → commonly `StatefulSet`.
 
+---
+
 ## Security
+
+---
 
 ### Kubernetes Security Primitives
 
@@ -4576,7 +4697,9 @@ Then, all **communication with the different components of the cluster from the 
 
 For **communication between the cluster**, we already seen that By default, all pods can access all other pods between the cluster but we can restrict access between them using **NetworkPolicies**.
 
-## Authentication
+---
+
+### Authentication
 
 Our concern is to manage authentication for users (cluster administrators and developers) and Service Accounts.
 
@@ -4612,6 +4735,8 @@ curl -v -k https://master-node-ip:6443/api/v1/pods --header "Authorization: Bear
 ```
 
 This method is not a recommended authorization mechanism because it stores tokens or password in clear text.
+
+---
 
 ### KubeConfig
 
@@ -4811,6 +4936,8 @@ $ kubectl config current-context
 dev@google
 ```
 
+---
+
 ### API Groups
 
 Whatever operations we have performed so far with the cluster, we have been interacting with the Kubernetes API Server, either through the `kubectl` utility or directly through its REST API. For example:
@@ -4831,7 +4958,7 @@ API groups are accessible via API paths in the following way:
   - `/authentication.k8s.io/v1`: authentication-related APIs;
   - `/rbac.authorization.k8s.io`: `Roles`, `RoleBindings`, `ClusterRoles`, `ClusterRoleBindings`;
   - `/certificates.k8s.io/v1`: `CertificateSigningRequests`;
-- Other API server endpoints (that are not API groups neither group them) like:
+- Other API server endpoints (that are not API groups neither group them), representing `nonResourceURLs` like:
   - `/version`: to view the version of the cluster;
   - `/healthz`: monitor the health of the cluster;
   - `/metrics`: retrieve metrics on the cluster;
@@ -4905,7 +5032,7 @@ Kubernetes API Server
 │       ├── /certificates.k8s.io/v1
 │       └── ...
 │
-└── Other API server endpoints
+└── Other API server endpoints (nonResourceURLs)
     ├── /version
     ├── /healthz
     ├── /metrics
@@ -5021,6 +5148,457 @@ Useful commands:
 - `kubectl explain <resource name>`: gives details on the Kind and lists the top level fields and their type;
 - `kubectl explain <resource name>.<field name>`: gives details on the Kind and lists the subfields and their type;
 - `kubectl explain <resource name> --recursive`: lists all fields that we would put in the yaml file.
+
+---
+
+### Authorization
+
+Authentication answers **"Who are you?"**
+Authorization answers **"What are you allowed to do?"**
+
+We need authorization in a cluster because we want to differentiate the actions that different users can perform. For example:
+
+- we don't want non-administrative users to perform operations like adding or deleting nodes, or modifying network or storage configuration;
+- we want to provide `ServiceAccounts` with the minimum level of access required to perform their operations;
+- we want to restrict access for users or groups to specific namespaces, in order to protect the workloads running in each of them.
+
+Authorization defines **what users are allowed to do**.
+
+There are different authorization modes / authorizers:
+
+| Authorizer      | Main purpose                                                            | Configuration                          |
+| --------------- | ----------------------------------------------------------------------- | -------------------------------------- |
+| **Node**        | Authorize kubelets based on the Pods and Nodes they are associated with | API server authorization configuration |
+| **ABAC**        | Authorize users/groups based on policy attributes                       | Policy file                            |
+| **RBAC**        | Authorize users/groups/ServiceAccounts through Roles and Bindings       | Kubernetes API resources               |
+| **Webhook**     | Delegate authorization decisions to an external service                 | External authorization service         |
+| **AlwaysAllow** | Allow all requests                                                      | kube-apiserver                         |
+| **AlwaysDeny**  | Deny all requests                                                       | kube-apiserver                         |
+
+The modes are set using the `--authorization-mode` option on the kube-apiserver.  
+If this option is not specified, it is set to `AlwaysAllow` by default.
+
+You can check it with the following command
+
+```bash
+kubectl describe pod kube-apiserver-controlplane -n kube-system | grep authorization-mode
+```
+
+or, if on a control plane node with the kube-apiserver installed
+
+```bash
+cat /etc/kubernetes/manifests/kube-apiserver.yaml | grep authorization-mode
+```
+
+> [!NOTE]
+>
+> In practice, production clusters normally configure a more restrictive authorization mode, commonly `Node,RBAC`. The `AlwaysAllow` default applies when no authorization mode is explicitly configured.
+
+You may also provide a comma separated list of multiple nodes to use, like `--authorization-mode=Node,RBAC,Webhook`.  
+When having multiple modes configured, the request is authorized using each authorizer in the specified order.  
+Each authorizer can return:
+
+- `Allow`: the request is immediately authorized;
+- `Deny`: the request is immediately denied;
+- `No opinion`: the request is forwarded to the next authorizer.
+
+If all authorizers return `No opinion`, the request is denied.
+
+In the example above, if a user sends a request, it is first handkled by the Node authorizer which returns `No opinion` because it only handles node requests; then the request is forwarded to the RBAC module, which performs is checks and returns `allow`. The authorization is now complete and the user is given access to the requested resource.
+
+> [!TIP]
+>
+> In modern Kubernetes environments, RBAC is by far the most common authorization mechanism for users, groups and ServiceAccounts.
+>
+> The Node authorizer handles kubelet authorization, while Webhook authorization can be used when an organization needs an external policy engine or centralized authorization system.
+
+The **Node authorizer** specifically authorizes API requests **made by kubelets**.
+
+We know that the `kube-apiserver` is accessed by users as well as by the kubelets running on the nodes within the cluster.  
+The kubelet:
+
+- accesses the API server to read information about Services, Endpoints, Nodes and other information about Pods assigned to it;
+- reports information to the API server about the node, such as its status, the status of the Pods running on it and events.
+
+The Node authorizer authorizes kubelets to perform the operations required to manage their assigned Pods and nodes.
+
+```text
+- read
+  - Services
+  - Endpoints
+  - Nodes
+  - Pods
+  - Secrets
+  - ConfigMaps
+  - PVCs
+  - PVs
+
+- write
+  - Node status
+  - Pod status
+  - Events
+
+and some other resources
+```
+
+> [!TIP]
+>
+> The Node authorizer works together with the NodeRestriction admission plugin to further restrict what a kubelet can modify.
+
+To be authorized by the Node authorizer, a kubelet must authenticate with an identity using the `system:node:<node-name>` username format and belong to the `system:nodes` group.  
+The Node authorizer then grants the kubelet the permissions required to operate its assigned Pods and Node.
+
+**Attribute-Based Access Control** is an authorization mechanism where we associate a user or a group of users with a set of permissions based on attributes.
+
+> [!NOTE]
+>
+> ABAC permissions are expressed using the same Kubernetes API concepts introduced in the previous section: API groups, resources and verbs.
+
+With ABAC, we create a policy file containing a set of policies defined in JSON format and pass it to the API server.
+For example:
+
+- This policy allows `dev-user` to perform read-only operations on `Pods` in any namespace.
+
+  ```json
+  {"apiVersion":"abac.authorization.kubernetes.io/v1beta1","kind":"Policy","spec":{"user":"dev-user","namespace":"*","resource":"pods","readonly":true,"apiGroup":""}}
+  ```
+
+- This policy allows members of the `dev-users` group to access `Pods` in any namespace.
+
+  ```json
+  {"apiVersion":"abac.authorization.kubernetes.io/v1beta1","kind":"Policy","spec":{"group":"dev-users","namespace":"*","resource":"pods","apiGroup":"*"}}
+  ```
+
+- This policy allows members of the `security-1` group to access `CertificateSigningRequest` resources in any namespace.
+
+  ```json
+  {"apiVersion":"abac.authorization.kubernetes.io/v1beta1","kind":"Policy","spec":{"group":"security-1","namespace":"","resource":"certificatesigningrequests","apiGroup":"certificates.k8s.io"}}
+  ```
+
+> [!NOTE]
+>
+> The field `readonly: true` limits the policy to read operations such as `get`, `list` and `watch`.  
+> Without `readonly`, a matching policy can also authorize write operations.
+
+With ABAC, policies are configured through a local file on the API server, and changes require the API server to be restarted to take effect.  
+This makes ABAC difficult to manage, especially in large environments.
+
+> [!NOTE]
+>
+> ABAC is a legacy authorization mechanism and is generally not used for new Kubernetes deployments.  
+> RBAC is the standard mechanism for managing permissions within Kubernetes.
+
+**Role-Based Access Control** makes the management of permissions much easier.  
+Instead of directly associating every user or group with a set of permissions, we define a **role** containing a set of rules and then associate users or groups with that role.
+
+For example, we can create a role with a set of permissions for developers and then associate all developers with that role.  
+Similarly, we can create a role for security users with the permissions required by their job and then associate all security users with that role.  
+Whenever a change needs to be made to the permissions, we modify the role and the change applies to all users associated with it.  
+RBAC provides a standard and flexible approach to managing access within Kubernetes.
+
+RBAC is implemented in Kubernetes using four resources:
+
+- `Role`
+- `ClusterRole`
+- `RoleBinding`
+- `ClusterRoleBinding`
+
+RBAC represents permissions as Kubernetes API objects. A `Role` or `ClusterRole` defines a set of permissions, while a `RoleBinding` or `ClusterRoleBinding` associates those permissions with users, groups or `ServiceAccounts`.
+
+> [!NOTE]
+>
+> RBAC permissions are additive: there are no explicit deny rules in Kubernetes RBAC.
+
+We'll see RBAC in more detail in the next chapters.
+
+If we want to **outsource the authorization decision** to an external system instead of using only the built-in authorization mechanisms, we can use the `Webhook` authorizer.
+
+For example, we can use a third-party policy engine such as **Open Policy Agent (OPA)**.
+
+In this scenario, Kubernetes sends an authorization request to the external service containing information about the request, such as:
+
+- the user or identity;
+- the requested resource;
+- the requested operation;
+- the namespace;
+- other relevant request attributes.
+
+Than, the external authorization service evaluates the request according to its policies and returns a decision.
+
+Based on that response, the Kubernetes API server either allows or denies the original request.
+
+```mermaid
+flowchart LR
+
+    U["User / Client<br/>(kubectl, application, etc.)"]
+    K["Kubernetes<br/>API Server"]
+    O["Open Policy Agent<br/>(OPA)"]
+
+    U -->|"1. API request"| K
+    K -->|"2. Authorization request<br/>(user, verb, resource, namespace, etc.)"| O
+    O -->|"3. Allow / Deny"| K
+    K -->|"4. Response<br/>(allow / deny)"| U
+```
+
+The flow can therefore be summarized as:
+
+1. The user sends a request to the Kubernetes API server.
+2. The API server forwards the authorization request to the external authorization service.
+3. The external service evaluates the request according to its policies and returns an authorization decision.
+4. The API server allows or denies the original request based on that decision.
+
+> [!NOTE]
+>
+> A Webhook authorizer does not mean that Kubernetes delegates all authentication to the external service.
+>
+> The Webhook is specifically used as an **authorization mechanism**: Kubernetes asks the external service whether a particular request should be allowed or denied.
+
+In addition to Authentication and Authorization, a request in order to be performed should also be admitted by the `AdmissionController`:
+
+- Authentication → Who are you?
+- Authorization → What are you allowed to do?
+- Admission → Is this request/object acceptable?
+
+but the Admission and `AdmissionController` subjects will be explained in the next chapters.
+
+---
+
+### Role-based access control (RBAC)
+
+We manage RBAC with the following objects:
+
+- `Role`: defines permissions within a namespace;
+- `ClusterRole`: defines permissions that can be applied at the cluster level via a `ClusterRoleBinding` or to a specific namespace via a `RoleBinding`;
+- `RoleBinding`: assigns a `Role` or a `ClusterRole` to the namespace of the binding;
+- `ClusterRoleBinding`: assigns a `ClusterRole` at the cluster level.
+
+So, making an example, we first create a `Role` object
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer
+  namespace: default
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list", "get", "create", "update", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]
+```
+
+or a `ClusterRole` object
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-admin
+rules:
+- apiGroups:
+  - '*'
+  resources:
+  - '*'
+  verbs:
+  - '*'
+- nonResourceURLs:
+  - '*'
+  verbs:
+  - '*'
+```
+
+You can add multiple rules in each `Role`.
+
+Each rule has three sections, as we talked about earlier: `apiGroups`, `resources` and `verbs`.  
+For core group, we can leave the `apiGroups` section blank; for any other group, we need to specify it.
+
+| Resource     | API group |
+| ------------ | --------- |
+| Pods         | `""`      |
+| ConfigMaps   | `""`      |
+| Services     | `""`      |
+| Secrets      | `""`      |
+| Deployments  | `apps`    |
+| StatefulSets | `apps`    |
+| DaemonSets   | `apps`    |
+| Jobs         | `batch`   |
+| CronJobs     | `batch`   |
+
+When defining rules for `Roles`, you can optionally allow access to specific resources by adding a `resourceNames` field to the `rule`
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: developer
+  namespace: default
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "update", "delete"]
+  resourceNames: ["blue", "orange"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create"]
+```
+
+> [!WARNING]
+>
+> `resourceNames` does not work with all the operations in the same way.  
+> In particular:
+>
+> - for operations such as `list` and `watch`, the behavior requires careful attention because the request must specify the resource name using `fieldSelector`.
+> - `resourceNames` cannot be used to restrict `create` operations to specific names, because a `create` request does not yet have a resource name available for authorization in the same way that operations on an existing resource do.
+
+Create the `Role` or the `ClusterRole` with the usual command `kubectl create -f developer-role.yaml` or `kubectl create -f pod-reader-cluster-role.yaml`.
+
+The next step is to link the user to that `Role`.  
+In order to accomplish this, we define another object called `RoleBinding`
+
+```yaml
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: devuser-developer-binding
+  namespace: default
+subjects:
+- kind: User
+  name: dev-user
+  apiGroup: rbac.authorization.k8s.io
+- kind: ServiceAccount
+  name: my-app
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: developer
+  apiGroup: rbac.authorization.k8s.io
+```
+
+or `ClusterRoleBinding`
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cluster-admin
+subjects:
+- kind: Group
+  name: system:masters
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+```
+
+> [!NOTE]
+>
+> Remember that the subject `kind` in the binding can be one between:
+>
+> - User;
+> - Group;
+> - ServiceAccount.
+
+We can create the object from the manifest with the usual command `kubectl create -f devuser-developer-binding.yaml` or `kubectl create -f dev-user-pod-reader.yaml`.
+
+```text
+┌─────────────┐
+│    Role     │
+│ permissions │
+└──────┬──────┘
+       │
+       │ RoleBinding
+       ▼
+ ┌──────────┐
+ │ Subject  │
+ │ User     │
+ │ Group    │
+ │ SA       │
+ └──────────┘
+```
+
+The `RoleBinding` or `ClusterRoleBinding` object, associates one or more subjects (User, Group or ServiceAccount) to a `Role` or `ClusterRole` and, apart the usual `kind`, `apiVersion` and `metadata` sections, has two main sections:
+
+- `subjects` is where we sepcify the user details;
+- `roleRef` where we provide the details of the created `Role`.
+
+> [!IMPORTANT]
+>
+> `Roles` and `RoleBindings` are namespaced resources.  
+> In the examples above of those objects, `dev-user` get access to `Pods` and `ConfigMaps` within the default namespace.  
+> If you want to assign a different namespace instead of the default one, you can do so by specifying a different value in `metadata.namespace` in both `Roles` and `RoleBindings`.
+>
+> A `Role` cannot grant access to cluster-scoped resource like:
+>
+> - `Nodes`;
+> - `PersistentVolumes`;
+> - `Namespaces`;
+> - `ClusterRoles`;
+> - `ClusterRoleBindings`.
+>
+> To grant this type of access, you use a `ClusterRole`, which is typically bound using a `ClusterRoleBinding`.  
+> For example, a `ClusterRole` that grants access to `nodes` is inherently useless when associated with a `RoleBinding`, because `nodes` do not belong to a namespace.
+>
+> Cluster-scoped resource → `ClusterRole` required.
+> Namespace-scoped resource → `Role` or `ClusterRole`.
+
+Keep in mind that the scope of the given permissions depends on the narrower of the scopes between the Binding and the Role
+
+| Binding              | Role          | Scope of permissions |
+| -------------------- | ------------- | -------------------- |
+| `RoleBinding`        | `Role`        | namespace            |
+| `RoleBinding`        | `ClusterRole` | namespace            |
+| `ClusterRoleBinding` | `ClusterRole` | whole cluster        |
+
+and it is not possible to bind a `ClusterRoleBinding` to a `Role`.
+
+> [!IMPORTANT]
+>
+> The role type determines what can be referenced; the binding type determines where the permissions are applied.
+
+In order to check if you have access to a particular resource in the cluster, you can use the command `kubectl auth can-i <verb> <resource>`, like for example
+
+```console
+$ kubectl auth can-i create deployments
+yes
+
+$ kubectl auth can-i delete nodes
+no
+```
+
+If you are an administrator, you can even impersonate another user to check their permissions by adding the parameter `--as <username>`, for example
+
+```console
+$ kubectl auth can-i create deployments --as dev-user
+no
+
+$ kubectl auth can-i create pods --as dev-user
+yes
+
+$ kubectl auth can-i create pods --as dev-user --namespace test
+no
+```
+
+Useful commands:
+
+- `kubectl get roles [-n <namespace>]`: view the `Roles`;
+- `kubectl get clusterroles`: view the `ClusterRoles`;
+- `kubectl get rolebindings [-n <namespace>]`: view the `RoleBindings`;
+- `kubectl get clusterrolebindings`: view the `ClusterRoleBindings`;
+- `kubectl create role <role name> --verb=<verb1>[,<verb2>][,<verb3>] --resource=<resource>`: imperative command for creating a `Role`;
+- `kubectl create clusterrole node-reader --verb=get,list,watch --resource=nodes`: imperative command example for creating a `ClusterRole`;
+- `kubectl create rolebinding <rolebinding name> --role=<role name> --user=<user name>`: imperative command for creating a `Rolebinding`;
+- `kubectl create rolebinding mike-node-reader --role=node-reader --user=mike`: imperative command example for creating a `ClusterRolebinding`;
+- `kubectl describe role <role_name>`: view the details of a specific `Role`;
+- `kubectl describe rolebinding <rolebinding_name>`: view the details of a specific `RoleBinding`;
+- `kubectl describe clusterrole node-reader`: view the details of a specific `ClusterRole` example;
+- `kubectl describe clusterrolebinding mike-node-reader`: view the details of a specific `ClusterRoleBinding` example;
+- `kubectl auth can-i <verb> <resource> [--as <username>]`: check if you can perform a specific action on a particular resource;
+- `kubectl auth can-i --list [--as <username>]`: list the actions that can be performed on all resources.
+
+---
 
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
