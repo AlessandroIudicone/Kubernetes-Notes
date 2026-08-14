@@ -3998,7 +3998,7 @@ spec:
   controller: k8s.io/ingress-nginx
 ```
 
-The corresponding Ingress than becomes
+The corresponding Ingress then becomes
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -4183,7 +4183,7 @@ Even if the pod is deleted, the data generated or processed remains on the volum
 
 In the following example, we create a pod and provide it a volume to store the processed data.  
 We should normally configure the volume with storage, but for now we are keeping simple and are using `hostPath` (this is not suitable for critical environments).  
-The possible values for of `spec.volumes[x].hostpath.type` are
+The possible values for of `spec.volumes[*].hostpath.type` are
 
 - `Directory`
 - `DirectoryOrCreate`
@@ -4193,7 +4193,7 @@ The possible values for of `spec.volumes[x].hostpath.type` are
 - `CharDevice`
 - `BlockDevice`
 
-The `spec.containers[0].volumeMounts.mountPath` declares where the volume is mounted within the container.
+The `spec.containers[*].volumeMounts.mountPath` declares where the volume is mounted within the container.
 
 ```yaml
 apiVersion: v1
@@ -5178,21 +5178,24 @@ There are different authorization modes / authorizers:
 The modes are set using the `--authorization-mode` option on the kube-apiserver.  
 If this option is not specified, it is set to `AlwaysAllow` by default.
 
-You can check it with the following command
+> [!NOTE]
+>
+> In practice, production clusters normally configure a more restrictive authorization mode, commonly `Node,RBAC`.  
+> The `AlwaysAllow` default applies when no authorization mode is explicitly configured.
+
+You can check the authorization mode configured with the following command:
 
 ```bash
+# From kubectl
 kubectl describe pod kube-apiserver-controlplane -n kube-system | grep authorization-mode
-```
 
-or, if on a control plane node with the kube-apiserver installed
-
-```bash
+# Alternatively, if on the control-plane with the kube-apiserver
 cat /etc/kubernetes/manifests/kube-apiserver.yaml | grep authorization-mode
 ```
 
-> [!NOTE]
+> [!TIP]
 >
-> In practice, production clusters normally configure a more restrictive authorization mode, commonly `Node,RBAC`. The `AlwaysAllow` default applies when no authorization mode is explicitly configured.
+> Replace `kube-apiserver-controlplane` with the name of the API Server `Pod` in your instance (for example `kube-apiserver-minikube` in Minikube)
 
 You may also provide a comma separated list of multiple nodes to use, like `--authorization-mode=Node,RBAC,Webhook`.  
 When having multiple modes configured, the request is authorized using each authorizer in the specified order.  
@@ -5204,7 +5207,7 @@ Each authorizer can return:
 
 If all authorizers return `No opinion`, the request is denied.
 
-In the example above, if a user sends a request, it is first handkled by the Node authorizer which returns `No opinion` because it only handles node requests; then the request is forwarded to the RBAC module, which performs is checks and returns `allow`. The authorization is now complete and the user is given access to the requested resource.
+In the example above, if a user sends a request, it is first handled by the Node authorizer which returns `No opinion` because it only handles node requests; then the request is forwarded to the RBAC module, which performs is checks and returns `allow`. The authorization is now complete and the user is given access to the requested resource.
 
 > [!TIP]
 >
@@ -5323,7 +5326,7 @@ In this scenario, Kubernetes sends an authorization request to the external serv
 - the namespace;
 - other relevant request attributes.
 
-Than, the external authorization service evaluates the request according to its policies and returns a decision.
+Then, the external authorization service evaluates the request according to its policies and returns a decision.
 
 Based on that response, the Kubernetes API server either allows or denies the original request.
 
@@ -5353,13 +5356,13 @@ The flow can therefore be summarized as:
 >
 > The Webhook is specifically used as an **authorization mechanism**: Kubernetes asks the external service whether a particular request should be allowed or denied.
 
-In addition to Authentication and Authorization, a request in order to be performed should also be admitted by the `AdmissionController`:
+In addition to Authentication and Authorization, a request in order to be persisted should also be admitted by the admission controller`:
 
 - Authentication → Who are you?
 - Authorization → What are you allowed to do?
 - Admission → Is this request/object acceptable?
 
-but the Admission and `AdmissionController` subjects will be explained in the next chapters.
+but the admission and admission controller subjects will be explained in the next chapters.
 
 ---
 
@@ -5521,7 +5524,7 @@ We can create the object from the manifest with the usual command `kubectl creat
 
 The `RoleBinding` or `ClusterRoleBinding` object, associates one or more subjects (User, Group or ServiceAccount) to a `Role` or `ClusterRole` and, apart the usual `kind`, `apiVersion` and `metadata` sections, has two main sections:
 
-- `subjects` is where we sepcify the user details;
+- `subjects` is where we specify the user details;
 - `roleRef` where we provide the details of the created `Role`.
 
 > [!IMPORTANT]
@@ -5597,6 +5600,448 @@ Useful commands:
 - `kubectl describe clusterrolebinding mike-node-reader`: view the details of a specific `ClusterRoleBinding` example;
 - `kubectl auth can-i <verb> <resource> [--as <username>]`: check if you can perform a specific action on a particular resource;
 - `kubectl auth can-i --list [--as <username>]`: list the actions that can be performed on all resources.
+
+---
+
+### Admission Controllers
+
+When a request hits the API Server, we know that it goes
+
+1) first, through an authentication process;
+2) then, through an authorization process (usually done through RBAC);
+3) finally, through the admission control phase, where admission plugins evaluate the request;
+4) if all the above steps are accomplished, the object of the request is persisted.
+
+```text
+         API Request
+              │
+              ▼
+     ┌─────────────────┐
+     │ Authentication  │
+     │                 │
+     │  Who are you?   │
+     └────────┬────────┘
+              │
+              ▼
+     ┌─────────────────┐
+     │  Authorization  │
+     │                 │
+     │    What can     │
+     │     you do?     │
+     └────────┬────────┘
+              │
+              ▼
+     ┌─────────────────┐
+     │    Admission    │
+     │                 │
+     │ Is this request │
+     │   acceptable?   │
+     └────────┬────────┘
+              │
+     ┌────────┴────────┐
+     │                 │
+  Mutating         Validating
+     │                 │
+modify object       allow/deny
+     │                 │
+     └────────┬────────┘
+              ↓
+        Persistence (etcd)
+```
+
+An Admission Controller intercepts API requests after authentication and authorization and before the object is persisted. It can reject them, and if it is a mutating controller, it can also modify them.  
+admission controllers are perfect for filtering requests cluster wide, regardless of the Users, Groups or ServiceAccounts they come from. For example:
+
+- only permit images from specific registries (internal corporate registries instead of public ones like DockerHub);
+- do not permit runAs root user;
+- only permit certain capabilities;
+- enforce pre-defined metadata and labels are declared in specific resources;
+- automatically add labels or other metadata.
+
+Admission controllers can be of type:
+
+- **Validating**: checks specific configuration in order to accept or reject the request object;
+- **Mutating**: modify the object contained in the request before it is persisted.
+
+> [!IMPORTANT]
+>
+> Mutating admission happens before validating admission.  
+> In the first phase, only mutating admission plugins run. In the second phase, only validating admission plugins run.  
+> This is so that any change made by the mutating admission controllers can be considered during the validation.
+
+Admission controllers help us implement stronger security measures and enforce how a cluster is used.
+
+Kubernetes provides several built-in admission plugins. Some are enabled by default, while others must be explicitly enabled.  
+A non-exhaustive list of the most relevant is the following
+
+| Admission controller         | Behaviour                                                                                                                                                    | enabled by default |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
+| `NamespaceLifecycle`         | Prevents operations on resources in namespaces that do not exist and handles requests involving namespaces that are terminating                              | :white_check_mark: |
+| `LimitRanger`                | Enforces `LimitRange` constraints, such as default CPU/memory requests and limits and maximum/minimum resource limits for Pods and containers                | :white_check_mark: |
+| `ResourceQuota`              | Enforces `ResourceQuota` limits for namespaces, restricting the amount/count of resources that can be created                                                | :white_check_mark: |
+| `ServiceAccount`             | Automatically assigns the `default` ServiceAccount to Pods that do not specify one and can apply related ServiceAccount defaults                             | :white_check_mark: |
+| `DefaultStorageClass`        | Observes creation of `PVC`s and automatically adds the default `StorageClass` if one is not specified                                                        | :white_check_mark: |
+| `PodSecurity`                | Enforces the **Pod Security Standards** (`privileged`, `baseline`, `restricted`) on Pods, according to the policy configured for the namespace               | :white_check_mark: |
+| `DefaultTolerationSeconds`   | Adds default tolerations for `not-ready` and `unreachable` taints, allowing Pods to remain bound to a node for a default amount of time before being evicted | :white_check_mark: |
+| `AlwaysPullImages`           | Sets `imagePullPolicy` to `Always` in Pods so that container images are always pulled                                                                        | :x:                |
+| `MutatingAdmissionWebhook`   | Calls external mutating webhooks that can modify the object before it is persisted                                                                           | :white_check_mark: |
+| `ValidatingAdmissionWebhook` | Calls external validating webhooks that can accept or reject a request, but cannot modify the object                                                         | :white_check_mark: |
+| `ValidatingAdmissionPolicy`  | Applies validation policies defined in Kubernetes using CEL expressions; can reject requests that do not satisfy the policy                                  | :white_check_mark: |
+
+> [!NOTE]
+>
+> The exact default of enabled and disabled admission plugins highly depends on the Kubernetes version.
+>
+> There also existing deprecated admission controllers, like:
+>
+> - `EventRateLimit`: limits the rate at which Events can be accepted by the API server;
+> - `NamespaceExists`: rejects requests targeting a namespace that does not exist;
+> - `NamespaceAutoProvision`: automatically creates a namespace when a request targets a namespace that does not exist.
+>
+> The automatic namespace creation feature of the deprecated `NamespaceAutoProvision` controller has not been moved to a new built-in admission controller.  
+> Instead, Kubernetes removed automatic provisioning behavior, and `NamespaceLifecycle` only rejects requests to missing namespaces.
+
+To test the behaviour of the `NamespaceLifecycle` admission controller we can do the following
+
+```console
+$ kubectl run nginx --image nginx --namespace blue
+Error from server (NotFound): namespaces "blue" not found
+
+$ kubectl get namespace
+NAME              STATUS   AGE
+default           Active   2d6h
+kube-public       Active   2d6h
+kube-system       Active   2d6h
+```
+
+You can **inspect the available admission plugin options and the default-enabled plugins** with
+
+```bash
+# From kubectl
+kubectl exec -it kube-apiserver-controlplane -n kube-system -- kube-apiserver -h | grep admission-plugins
+
+# Alternatively, if on the control-plane with the kube-apiserver
+kube-apiserver -h | grep enable-admission-plugins
+```
+
+> [!TIP]
+>
+> Replace `kube-apiserver-controlplane` with the name of the API Server `Pod` in your instance (for example `kube-apiserver-minikube` in Minikube)
+
+The result will be something like that
+
+```bash
+      --admission-control strings                    Admission is divided into two phases. In the first phase, only mutating admission plugins run. In the second phase, only validating admission plugins run. The names in the below list may represent a validating plugin, a mutating plugin, or both. The order of plugins in which they are passed to this flag does not matter. Comma-delimited list of: AlwaysAdmit, AlwaysDeny, AlwaysPullImages, CertificateApproval, CertificateSigning, CertificateSubjectRestriction, ClusterTrustBundleAttest, DefaultIngressClass, DefaultStorageClass, DefaultTolerationSeconds, DenyServiceExternalIPs, EventRateLimit, ExtendedResourceToleration, ImagePolicyWebhook, LimitPodHardAntiAffinityTopology, LimitRanger, MutatingAdmissionPolicy, MutatingAdmissionWebhook, NamespaceAutoProvision, NamespaceExists, NamespaceLifecycle, NodeDeclaredFeatureValidator, NodeRestriction, OwnerReferencesPermissionEnforcement, PersistentVolumeClaimResize, PodNodeSelector, PodSecurity, PodTolerationRestriction, PodTopologyLabels, Priority, ResourceQuota, RuntimeClass, ServiceAccount, StorageObjectInUseProtection, TaintNodesByCondition, ValidatingAdmissionPolicy, ValidatingAdmissionWebhook. (DEPRECATED: Use --enable-admission-plugins or --disable-admission-plugins instead. Will be removed in a future version.)
+      --disable-admission-plugins strings            admission plugins that should be disabled although they are in the default enabled plugins list (NamespaceLifecycle, LimitRanger, ServiceAccount, TaintNodesByCondition, PodSecurity, Priority, DefaultTolerationSeconds, DefaultStorageClass, StorageObjectInUseProtection, PersistentVolumeClaimResize, RuntimeClass, CertificateApproval, CertificateSigning, ClusterTrustBundleAttest, CertificateSubjectRestriction, DefaultIngressClass, PodTopologyLabels, NodeDeclaredFeatureValidator, MutatingAdmissionPolicy, MutatingAdmissionWebhook, ValidatingAdmissionPolicy, ValidatingAdmissionWebhook, ResourceQuota). Comma-delimited list of admission plugins: AlwaysAdmit, AlwaysDeny, AlwaysPullImages, CertificateApproval, CertificateSigning, CertificateSubjectRestriction, ClusterTrustBundleAttest, DefaultIngressClass, DefaultStorageClass, DefaultTolerationSeconds, DenyServiceExternalIPs, EventRateLimit, ExtendedResourceToleration, ImagePolicyWebhook, LimitPodHardAntiAffinityTopology, LimitRanger, MutatingAdmissionPolicy, MutatingAdmissionWebhook, NamespaceAutoProvision, NamespaceExists, NamespaceLifecycle, NodeDeclaredFeatureValidator, NodeRestriction, OwnerReferencesPermissionEnforcement, PersistentVolumeClaimResize, PodNodeSelector, PodSecurity, PodTolerationRestriction, PodTopologyLabels, Priority, ResourceQuota, RuntimeClass, ServiceAccount, StorageObjectInUseProtection, TaintNodesByCondition, ValidatingAdmissionPolicy, ValidatingAdmissionWebhook. The order of plugins in this flag does not matter.
+      --enable-admission-plugins strings             admission plugins that should be enabled in addition to default enabled ones (NamespaceLifecycle, LimitRanger, ServiceAccount, TaintNodesByCondition, PodSecurity, Priority, DefaultTolerationSeconds, DefaultStorageClass, StorageObjectInUseProtection, PersistentVolumeClaimResize, RuntimeClass, CertificateApproval, CertificateSigning, ClusterTrustBundleAttest, CertificateSubjectRestriction, DefaultIngressClass, PodTopologyLabels, NodeDeclaredFeatureValidator, MutatingAdmissionPolicy, MutatingAdmissionWebhook, ValidatingAdmissionPolicy, ValidatingAdmissionWebhook, ResourceQuota). Comma-delimited list of admission plugins: AlwaysAdmit, AlwaysDeny, AlwaysPullImages, CertificateApproval, CertificateSigning, CertificateSubjectRestriction, ClusterTrustBundleAttest, DefaultIngressClass, DefaultStorageClass, DefaultTolerationSeconds, DenyServiceExternalIPs, EventRateLimit, ExtendedResourceToleration, ImagePolicyWebhook, LimitPodHardAntiAffinityTopology, LimitRanger, MutatingAdmissionPolicy, MutatingAdmissionWebhook, NamespaceAutoProvision, NamespaceExists, NamespaceLifecycle, NodeDeclaredFeatureValidator, NodeRestriction, OwnerReferencesPermissionEnforcement, PersistentVolumeClaimResize, PodNodeSelector, PodSecurity, PodTolerationRestriction, PodTopologyLabels, Priority, ResourceQuota, RuntimeClass, ServiceAccount, StorageObjectInUseProtection, TaintNodesByCondition, ValidatingAdmissionPolicy, ValidatingAdmissionWebhook. The order of plugins in this flag does not matter.
+```
+
+> [!IMPORTANT]
+>
+> `--admission-control` is deprecated in favor of `--enable-admission-plugins` and `--disable-admission-plugins`
+
+To find out, instead, **which plugins are configured manually on your API server**, you can:
+
+```bash
+# Inspect the manifest of the static pod
+kubectl get pod kube-apiserver-controlplane -n kube-system -o yaml | grep -E "enable-admission-plugins|disable-admission-plugins"
+
+# Alternatively, if on the control-plane with the kube-apiserver
+cat /etc/kubernetes/manifests/kube-apiserver.yaml | grep -E "enable-admission-plugins|disable-admission-plugins"
+# Or
+grep admission /etc/kubernetes/manifests/kube-apiserver.yaml
+```
+
+To **enable or disable admission controllers**, you need to edit the kube-apiserver configuration file
+
+```bash
+vi /etc/kubernetes/manifests/kube-apiserver.yaml
+```
+
+and then modify `--enable-admission-plugins` or `--disable-admission-plugins` accordingly.
+
+There are also external **Admission Webhooks**, which are external services that Kubernetes can call in order to make an admission decision for a request.
+
+You can build and deploy a WebHook server by yourself, as a classic server or as a Deployment in your Kubernetes cluster.  
+keep in mind that many modern admission controllers are implemented as external extensions rather than built directly into the Kubernetes API server.  
+Examples include policy engines such as Kyverno and OPA Gatekeeper.
+
+Kubernetes provides two built-in admission plugins specifically for invoking external webhooks:
+
+- `MutatingAdmissionWebhook`: invokes external webhooks that can modify the object;
+- `ValidatingAdmissionWebhook`: invokes external webhooks that can accept or reject the request, but cannot modify the object.
+
+> [!NOTE]
+>
+> `MutatingAdmissionWebhook` and `ValidatingAdmissionWebhook` are admission controllers themselves.
+
+The webhooks are configured using Kubernetes API resources:
+
+- `MutatingWebhookConfiguration`: used when the webhook needs to modify the object;
+- `ValidatingWebhookConfiguration`: used when the webhook only needs to validate the request.
+
+You can list the configured webhooks using the standard `kubectl` commands:
+
+```bash
+# List the configured validating webhooks
+kubectl get validatingwebhookconfigurations
+
+# List the configured mutating webhooks
+kubectl get mutatingwebhookconfigurations
+```
+
+You can inspect a specific configuration with:
+
+```bash
+kubectl describe validatingwebhookconfiguration <name>
+
+kubectl describe mutatingwebhookconfiguration <name>
+```
+
+or retrieve the complete configuration in YAML format:
+
+```bash
+kubectl get validatingwebhookconfiguration <name> -o yaml
+
+kubectl get mutatingwebhookconfiguration <name> -o yaml
+```
+
+An Admission Webhook is typically exposed as an HTTPS endpoint running inside or outside the Kubernetes cluster.  
+It works this way:
+
+- the API server sends to the webhook the `AdmissionReview` object in a JSON format;
+
+  ```json
+  {
+    "apiVersion": "admission.k8s.io/v1",
+    "kind": "AdmissionReview",
+    "request": {
+      "uid": "705ab4f5-6393-11e8-b7a1-42010a800002",
+      "kind": {
+        "group": "",
+        "version": "v1",
+        "kind": "Pod"
+      },
+      "resource": {
+        "group": "",
+        "version": "v1",
+        "resource": "pods"
+      },
+      "requestKind": {
+        "group": "",
+        "version": "v1",
+        "kind": "Pod"
+      },
+      "requestResource": {
+        "group": "",
+        "version": "v1",
+        "resource": "pods"
+      },
+      "name": "nginx-pod",
+      "namespace": "default",
+      "operation": "CREATE",
+      "userInfo": {
+        "username": "kubernetes-admin",
+        "groups": [
+          "system:masters",
+          "system:authenticated"
+        ]
+      },
+      "object": {
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+          "name": "nginx-pod",
+          "namespace": "default"
+        },
+        "spec": {
+          "containers": [
+            {
+              "name": "nginx",
+              "image": "nginx:latest"
+            }
+          ]
+        }
+      },
+      "oldObject": null,
+      "dryRun": false,
+      "options": {
+        "apiVersion": "meta.k8s.io/v1",
+        "kind": "CreateOptions"
+      }
+    }
+  }
+  ```
+
+- the webhook evaluates the request according to its own policies and returns a `AdmissionReview` response to the API server.  
+  For example, we can have an accepted request from the validating webhook
+
+  ```json
+  {
+    "apiVersion": "admission.k8s.io/v1",
+    "kind": "AdmissionReview",
+    "response": {
+      "uid": "705ab4f5-6393-11e8-b7a1-42010a800002",
+      "allowed": true
+    }
+  }
+  ```
+
+  or a denied one
+
+  ```json
+  {
+    "apiVersion": "admission.k8s.io/v1",
+    "kind": "AdmissionReview",
+    "response": {
+      "uid": "705ab4f5-6393-11e8-b7a1-42010a800002",
+      "allowed": false,
+      "status": {
+        "code": 403,
+        "message": "The use of the tag 'latest' is not allowed for images in this cluster."
+      }
+    }
+  }
+  ```
+
+  and in case of mutating webhook, we can have a patch to apply to the object
+
+  ```json
+  {
+    "apiVersion": "admission.k8s.io/v1",
+    "kind": "AdmissionReview",
+    "response": {
+      "uid": "705ab4f5-6393-11e8-b7a1-42010a800002",
+      "allowed": true,
+      "patchType": "JSONPatch",
+      "patch": "W3sib3AiOiJhZGQiLCJwYXRoIjoiL21ldGFkYXRhL2xhYmVscyIsInZhbHVlIjp7ImVudiI6InByb2R1Y3Rpb24ifX1d"
+    }
+  }
+  ```
+
+For a validating webhook, the `AdmissionReview.AdmissionResponse.allowed` field of the response contains a decision such as:
+
+- `true`: the request is accepted;
+- `false`: the request is rejected.
+
+A mutating webhook can additionally return a set of modifications to apply to the object, typically using a JSON Patch.
+
+This is a simplified rapresentation of the WebHooks flow (the actual admission chain can contain multiple built-in plugins and multiple webhooks):
+
+```text
+      Kubernetes API Server
+              │
+              │ Admission request
+              ▼
+┌───────────────────────────┐
+│ MutatingAdmissionWebhook  │
+└─────────────┬─────────────┘
+              │
+              ▼
+      External Webhook
+              │
+  modified or default object
+              │
+              ▼
+┌───────────────────────────┐
+│ValidatingAdmissionWebhook │
+└─────────────┬─────────────┘
+              │
+              ▼
+      External Webhook
+              │
+        allow or deny
+              │
+              ▼
+            etcd
+```
+
+The webhook configuration specifies which requests should be sent to the external service.  
+For example, a webhook can be configured to intercept:
+
+- only CREATE requests;
+- only UPDATE requests;
+- only Pods;
+- only resources belonging to a specific API group;
+- only requests targeting specific namespaces;
+- a combination of these conditions.
+
+This allows a webhook to apply a policy only to the resources and operations for which it is relevant.
+
+A simplified `ValidatingWebhookConfiguration` looks like this:
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: example-validator
+webhooks:
+- name: validator.example.com
+  rules:
+  - apiGroups: [""]
+    apiVersions: ["v1"]
+    operations: ["CREATE", "UPDATE"]
+    resources: ["pods"]
+  clientConfig:
+    service:
+      namespace: webhook-system
+      name: validator
+      path: /validate
+    caBundle: <CA_BUNDLE>
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+```
+
+The important fields are:
+
+- `rules`: defines which API requests are intercepted;
+- `clientConfig`: specifies where the webhook is located;
+- `service`: identifies the Kubernetes Service exposing the webhook;
+- `url`: if deploying the server externally and it is not part of a Kubernetes cluster, we use this field instead of `service`, where we specify the exact path to that server;
+- `path`: HTTP path invoked by the API server;
+- `caBundle`: CA certificate used by the API server to verify the webhook server certificate;
+- `admissionReviewVersions`: specifies the `AdmissionReview` API versions supported by the webhook;
+- `sideEffects`: declares whether calling the webhook has side effects.
+
+The API server communicates with the webhook using the `AdmissionReview` API.
+
+The webhook then returns an `AdmissionReview` response containing the admission decision.
+
+> [!IMPORTANT]
+>
+> An Admission Webhook is not an authentication or authorization mechanism.  
+> Authentication answers "Who are you?".  
+> Authorization answers "Are you allowed to perform this operation?".  
+> Admission answers "Should this request/object be accepted?".  
+> A webhook is simply an external component that participates in the admission phase.
+
+Other relevant fields of Admission Webhooks are:
+
+- `failurePolicy`: specifies what the API server should do if the webhook cannot be reached or fails to respond successfully:
+  - `Fail`: the request is denied;
+  - `Ignore`: the request continues without the decision of the webhook;
+- `namespaceSelector`: allows the webhook to be triggered only for namespaces that match specific labels;
+- `objectSelector`: allows the webhook to be triggered only for objects that match specific labels.
+
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+webhooks:
+  - name: my-webhook.example.com
+    objectSelector:
+      matchLabels:
+        foo: bar
+    namespaceSelector:
+      matchExpressions:
+        - key: runlevel
+          operator: NotIn
+          values: ["0","1"]
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: ["*"]
+        apiVersions: ["*"]
+        resources: ["*"]
+```
 
 ---
 
