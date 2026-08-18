@@ -6045,6 +6045,151 @@ webhooks:
 
 ---
 
+### API versions
+
+When an API version is at `v1`, it means that it is a Generally Available stable version.  
+But there are other version kinds, like the following:
+
+| Binding            | Alpha                                            | Beta                                                 | GA (stable)                             |
+| ------------------ | ------------------------------------------------ | ---------------------------------------------------- | --------------------------------------- |
+| Version Name       | vXalphaY (eg: `v1alpha1`)                        | vXbetaY (eg: `v1beta1`)                              | vX (eg: `v1`)                           |
+| Enabled by default | No. Can be enabled via flags                     | Usually no ¹                                         | Yes by default                          |
+| Tests              | May lack e2e tests                               | Has e2e tests                                        | Has conformance tests                   |
+| Reliability        | May have bugs                                    | May have minor bugs                                  | Highlt reliable                         |
+| Support            | No commitment; may be dropped later              | Commits to complete the feature and move to GA       | Will be present in many future releases |
+| Audience           | Expert users interested in giving early feedback | Users interested beta testing and providing feedback | All users                               |
+
+¹ Beta APIs introduced before Kubernetes 1.22 were normally enabled by default.
+
+Alpha version are used when an API is first developed and becomes part of the Kubernetes release for the very firrst time.  
+Alpha API groups are not enabled by default.
+
+An API may graduate from Alpha to Beta and eventually to GA when the required stability, testing and design criteria are met.
+
+The current API Groups with their served versions is documented here <https://kubernetes.io/docs/reference/kubernetes-api/group-versions/>.  
+If you look at this page you'll notice that some of those API have multiple versions.  
+This because an API group can support multiple versions at the same time allowing users to use the dersired version based on stability / innovatitivy requirements.  
+But even tough, only one can be the preferred version and only one can be the storage version.
+
+![API groups](./images/api-groups.png "API groups")
+
+> [!NOTE]
+>
+> The example above is for illustrative purposes only.
+> It does not reflect the real version history of the `Deployment` API.
+> The `apps` API group currently only serves the `v1` version.
+
+The preferred version is the one used if not differently specified (like when performing the commands `kubectl get <resource>` or `kubectl explain <resource>`).  
+The storage version is the version used by the API server to serialize objects when they are persisted in the storage backend (usually etcd).  
+The API server transparently converts between the API version used by the client and the version used for storage.  
+
+```text
+Client
+  ↓
+API version requested
+  ↓
+kube-apiserver
+  ↓
+conversion
+  ↓
+storage version
+  ↓
+etcd
+```
+
+You can check the preferred version with a command like the following
+
+```bash
+kubectl get --raw "/apis/batch" | jq
+```
+
+```json
+{
+  "kind": "APIGroup",
+  "apiVersion": "v1",
+  "name": "batch",
+  "versions": [
+    {
+      "groupVersion": "batch/v1",
+      "version": "v1"
+    }
+  ],
+  "preferredVersion": {
+    "groupVersion": "batch/v1",
+    "version": "v1"
+  }
+}
+```
+
+> [!NOTE]
+>
+> (Advanced / useful for understanding, not normally needed for CKAD)
+>
+> As of now, it is not possible to see the storage version of a particular API through an API command.  
+> One way to find it out is to look at the stored object in the etc server itself.
+>
+> ```console
+> $ ETCDCTL_API=3 etcdctl \
+>   --endpoints=https://:2379 \
+>   --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+>   --cert=/etc/kubernetes/pki/etcd/server.crt \
+>   --key=/etc/kubernetes/pki/etcd/server.key \
+>   get "/registry/deployments/default/blue" --print-value-only
+>
+> k8s
+>
+> apps/v1
+> Deployment
+>
+>
+> bluedefault" * $cf8dcd55-8819-4be2-85e7-bb71665c2ddf2ZB
+> successfully progresse8"2
+> ```
+
+To enable or disable a specific version, we must add it to the **runtime config** parameter of the Kube API server service:
+
+- with no value or `=true` if we want to enable a specific API group;
+- with the `=false` value if we want to disable a specific API group.
+
+```diff
+ExecStart=/usr/local/bin/kube-apiserver \\
+  --advertise-address=\${INTERNAL_IP} \\
+  --allow-privileged=true \\
+  --apiserver-count=3 \\
+  --authorization-mode=Node,RBAC \\
+  --bind-address=0.0.0.0 \\
+  --enable-swagger-ui=true \\
+  --etcd-cafile=/var/lib/kubernetes/ca.pem \\
+  --etcd-certfile=/var/lib/kubernetes/apiserver-etcd-client.crt \\
+  --etcd-keyfile=/var/lib/kubernetes/apiserver-etcd-client.key \\
+  --etcd-servers=https://127.0.0.1:2379 \\
+  --event-ttl=1h \\
+  --kubelet-certificate-authority=/var/lib/kubernetes/ca.pem \\
+  --kubelet-client-certificate=/var/lib/kubernetes/apiserver-etcd-client.crt \\
+  --kubelet-client-key=/var/lib/kubernetes/apiserver-etcd-client.key \\
+  --kubelet-https=true \\
++ --runtime-config=batch/v2alpha1,authentication.k8s.io/v1beta1=true,storage.k8s.io/v1beta1=false \\
+  --service-account-key-file=/var/lib/kubernetes/service-account.pem \\
+  --service-cluster-ip-range=10.32.0.0/24 \\
+  --service-node-port-range=30000-32767 \\
+  --client-ca-file=/var/lib/kubernetes/ca.pem \\
+  --tls-cert-file=/var/lib/kubernetes/apiserver.crt \\
+  --tls-private-key-file=/var/lib/kubernetes/apiserver.key \\
+  --v=2
+```
+
+After having modified `--runtime-config`, you need to restart the kube-apiserver (and the controller manager) to apply the changes.
+
+There are also the following options:
+
+- `api/all=false`: disables all API versions that are not strictly necessary (use with caution by combining it with exceptions, e.g., `api/all=false,api/v1=true`);
+- `api/beta=false`: bulk-disables all Beta APIs across the cluster;
+- `api/alpha=false`: bulk-disables all Alpha APIs across the cluster.
+
+that you can combine in interesting ways, like `--runtime-config=api/all=false,api/v1=true` which disable all the APIs and then re-enable only the `v1`s.
+
+---
+
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
 The exam lasts 2 hours and typically includes around 15–20 performance-based tasks.
