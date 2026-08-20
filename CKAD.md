@@ -4859,7 +4859,7 @@ current-context: admin@production
 > - as a path to a certificate file, with the `certificate-authority` field;  
 > - directly in the kubeconfig as a base64-encoded value, with the `certificate-authority-data` field.
 
-![kubeconfig: clusters, context and users.png](./images/kubeconfig-clusters-context-users.png "kubeconfig contents")
+![kubeconfig: clusters, context and users](./images/01-kubeconfig-clusters-context-users.png "kubeconfig contents")
 
 ```mermaid
 flowchart LR
@@ -6071,7 +6071,7 @@ If you look at this page you'll notice that some of those API have multiple vers
 This because an API group can support multiple versions at the same time allowing users to use the dersired version based on stability / innovatitivy requirements.  
 But even tough, only one can be the preferred version and only one can be the storage version.
 
-![API groups](./images/api-groups.png "API groups")
+![API groups](./images/02-api-groups.png "API groups")
 
 > [!NOTE]
 >
@@ -6187,6 +6187,73 @@ There are also the following options:
 - `api/alpha=false`: bulk-disables all Alpha APIs across the cluster.
 
 that you can combine in interesting ways, like `--runtime-config=api/all=false,api/v1=true` which disable all the APIs and then re-enable only the `v1`s.
+
+---
+
+### API deprecations
+
+Deprecated and removed APIs are different concepts.
+
+```text
+Deprecated: API continues to work
+    ↓
+Warning: migration should be planned
+    ↓
+Removed: API no longer served
+```
+
+Starting from Kubernetes 1.19, when a REST API is deprecated, the API server:
+
+- returns an HTTP Warning header;
+- adds `k8s.io/deprecated: "true"` to the audit event;
+- exposes the metric `apiserver_requested_deprecated_apis`.
+
+API deprecation follows several rules.
+
+**Rule #1**  
+API elements may only be removed by incrementing the version of the API group.
+
+For example, if an API element exists in `v1alpha1`, it cannot simply be removed from `v1alpha1`. A new API version such as `v1alpha2` must be introduced.
+
+![CRD deprecation policy](./images/03-crd-deprecation-policy.png "CRD deprecation policy")
+
+**Rule #2**  
+API objects must be able to round-trip between API versions in a given release without information loss, with the exception of whole REST resources that do not exist in some versions.
+
+If a resource is converted from `v1alpha1` to `v1alpha2`, even if the structure of the resource in the `v1alpha2` is different from the one in the `v1alpha1` (for example an extra field is present), when converting that resource from `v1alpha2` to `v1alpha1`, the result should be identical to the one before the first conversion.
+
+![CRD round trip](./images/04-crd-round-trip.png "CRD round trip")
+
+Furthermore, if `v1alpha2` introduces a new field, it must be possible to represent it even when performing a round-trip through `v1alpha1`, possibly using an equivalent field or an annotation.
+
+**Rule #3a**  
+An API version cannot be deprecated in favor of one of a less stable version.
+
+GA → Beta       :x:
+GA → Alpha      :x:
+Beta → Alpha    :x:
+Alpha → Beta    :white_check_mark:
+Beta → GA       :white_check_mark:
+Alpha → GA      :white_check_mark:
+
+An API version may only be deprecated in favor of an API version with the same or higher stability level.
+
+**Rule #4a**  
+Other than the most recent API versions in each track, older API versions must
+be supported after their announced deprecation for a duration of no less than:
+
+- **GA**: can be deprecated, but cannot be removed within the same major version;
+- **Beta**: must be supported for at least 9 months or 3 minor releases after introduction, whichever is longer; after deprecation, it must remain served for at least 9 months or 3 minor releases, whichever is longer;
+- **Alpha**: can be removed in any release without previous deprecation notice.
+
+**Rule #4b**  
+The "preferred" API version and the "storage" version for a given group may not advance until after a release has been made that supports both the new version and the previous version.
+
+This allows an upgrade to be rolled back while maintaining compatibility with objects stored using the previous API/storage version.
+
+The `kubectl convert` command allows to convert yaml manifests with the syntax `kubectl convert -f <old file> --output-version <new-api>`.  
+For example `kubectl convert -f nginx.yaml --output-version apps/v1`.  
+The `kubectl convert` convert may not be available on the system because is a plugin that needs to be installed separately.
 
 ---
 
