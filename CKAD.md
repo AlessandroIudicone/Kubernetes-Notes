@@ -1584,7 +1584,7 @@ Kubernetes v1.24 introduced KEP-2799: "Reduction of Secret-based Service Account
 Here, when creating a ServiceAccount, the Secret is not automatically created.  
 You must run the command `kubectl create token dashboard-sa` to generate a token for that ServiceAccount, which will also be printed on screen at creation.
 
-| Version | Behaviour                                                  |
+| Version | Behavior                                                   |
 | ------- | ---------------------------------------------------------- |
 | ≤1.21   | Secret containing a long-lived token automatically created |
 | 1.22    | TokenRequest API introduced                                |
@@ -2878,8 +2878,8 @@ For jobs like batch processing, analytics or reporting, that are meant to live f
 >
 > you'll risk to trigger multiple restarts on the container because after it completes, Kubernetes continues to bring the container up again.  
 > This is because the default restart policy for Pods is `Always`, which consists in restarting the container in an attempt to keep it running, until a threshold is reached.  
-> This behaviour is defined by the property `spec.restartPolicy` which by default is set to always.  
-> You can override this behaviour by setting this property to `Never` or `OnFailure`.  
+> This behavior is defined by the property `spec.restartPolicy` which by default is set to always.  
+> You can override this behavior by setting this property to `Never` or `OnFailure`.  
 > But anyway, this pattern is discouraged and we should define short-lived tasks in Jobs or CronJobs instead of Pods.
 
 While `ReplicaSet` is used to make sure a specified number of pods is running at all time, a `Job` is used to run a set of pods to perform a given task to completion.
@@ -4540,7 +4540,7 @@ When scaling up a `StatefulSet`, each new created pod has to be in running and r
 This is useful for example when scaling a MySql DBMS, where each new instance can clone from the previous one.  
 It works in reverse order when scaling down: the last instance is removed first, followed by the second last one.  
 The same is true on termination: when deleting a `StatefulSet`, the pods are dewleted in reverse order.  
-Anyway, this is the default behaviour of Stateful Sets, which we can override to not follow an ordered launch but still have the other benefits of a stateful sets (like a stable and unique network ID). For that we need to set `spec.podManagementPolicy` to `Parallel` (the default is `OrderedReady`).
+Anyway, this is the default behavior of Stateful Sets, which we can override to not follow an ordered launch but still have the other benefits of a stateful sets (like a stable and unique network ID). For that we need to set `spec.podManagementPolicy` to `Parallel` (the default is `OrderedReady`).
 
 ---
 
@@ -5645,7 +5645,7 @@ When a request hits the API Server, we know that it goes
 modify object       allow/deny
      │                 │
      └────────┬────────┘
-              ↓
+              ▼
         Persistence (etcd)
 ```
 
@@ -5674,7 +5674,7 @@ Admission controllers help us implement stronger security measures and enforce h
 Kubernetes provides several built-in admission plugins. Some are enabled by default, while others must be explicitly enabled.  
 A non-exhaustive list of the most relevant is the following
 
-| Admission controller         | Behaviour                                                                                                                                                    | enabled by default |
+| Admission controller         | Behavior                                                                                                                                                     | enabled by default |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
 | `NamespaceLifecycle`         | Prevents operations on resources in namespaces that do not exist and handles requests involving namespaces that are terminating                              | :white_check_mark: |
 | `LimitRanger`                | Enforces `LimitRange` constraints, such as default CPU/memory requests and limits and maximum/minimum resource limits for Pods and containers                | :white_check_mark: |
@@ -5701,7 +5701,7 @@ A non-exhaustive list of the most relevant is the following
 > The automatic namespace creation feature of the deprecated `NamespaceAutoProvision` controller has not been moved to a new built-in admission controller.  
 > Instead, Kubernetes removed automatic provisioning behavior, and `NamespaceLifecycle` only rejects requests to missing namespaces.
 
-To test the behaviour of the `NamespaceLifecycle` admission controller we can do the following
+To test the behavior of the `NamespaceLifecycle` admission controller we can do the following
 
 ```console
 $ kubectl run nginx --image nginx --namespace blue
@@ -6254,6 +6254,254 @@ This allows an upgrade to be rolled back while maintaining compatibility with ob
 The `kubectl convert` command allows to convert yaml manifests with the syntax `kubectl convert -f <old file> --output-version <new-api>`.  
 For example `kubectl convert -f nginx.yaml --output-version apps/v1`.  
 The `kubectl convert` convert may not be available on the system because is a plugin that needs to be installed separately.
+
+---
+
+### Custom resources
+
+The behavior of the resources (seen until now) is managed by their respective controller.  
+Many Kubernetes resources are managed by controllers.  
+A controller continuously watches one or more resources and takes actions to make the actual state match the desired state.  
+For example:
+
+- the `Deployment` controller ensures that when defining `replicas: 3`, a `ReplicaSet` is created which in turn, with its own `ReplicaSet` controller, creates exactly three `Pods`;
+
+  ```text
+  Deployment
+      │
+      │ Deployment controller
+      ▼
+  ReplicaSet
+      │
+      │ ReplicaSet controller
+      ▼
+  Pods
+  ```
+
+- for the `Service`, there isn't a single dedicated "Service controller" that spawns further child resources the way the `Deployment`/`ReplicaSet` controllers do; its behavior is split across several components (the endpoints/EndpointSlice controllers, `kube-proxy`, and — only for `LoadBalancer`-type Services — the "service controller" inside the cloud-controller-manager).
+
+The controller is a process that runs in the background and continuously monitors the status of resources it is supposed to manage.  
+When we perform a CRUD operation on the concerned resources, the new desired state is stored in etcd; the controller, which is watching the resources, performs a reconciliation loop in an attempt to align the actual state with the desired one.
+
+Custom resources are an extension of the Kubernetes API that is not necessarily available in a default Kubernetes installation.
+
+```text
+CRD
+ ↓
+Custom Resource
+ ↓
+API Server ─────► etcd
+ ↓
+Controller watches resources
+ ↓
+Reconciliation loop
+ ↓
+Desired state → Actual state
+```
+
+`CustomResourceDefinition`s (`CRD`s) extend the Kubernetes API.  
+Custom resources are objects stored and managed through that API.  
+A custom controller gives those objects a behavior by continuously reconciling their desired state with their actual state.
+
+```text
+    ┌──────────────────┐
+    │   Kubernetes     │
+    │    API Server    │
+    └────────┬─────────┘
+             │
+  ┌──────────┴──────────┐
+  ▼                     ▼
+etcd              Custom Controller
+                        │
+                        │ reconciliation
+                        ▼
+                  External system
+```
+
+Controllers are usually written in Go.  
+Here is an example of the [Deployment controller](https://github.com/kubernetes/kubernetes/blob/master/pkg/controller/deployment/deployment_controller.go).
+
+Once we've defined a custom resource, we are able to perform CRUD operations (create, read, update, delete) on it — and every request is automatically validated against the defined schema.  
+But if we want the resource to actually have a behavior, we also need to take care of a custom controller.  
+
+> [!TIP]
+>
+> A custom resource does not require a custom controller.  
+> A controller is needed when we want the custom resource to trigger some additional behavior or reconciliation logic.
+
+For example, we can make a custom resource called `FlightTicket` whose controller, when CRUD operations are performed on it, contacts an external API and manages the actual ticket booking actions.
+
+![CRD FlightTicket](./images/05-crd-FlightTicket.png "CRD FlightTicket")
+
+But in order to use a custom resource, we have to first **define** it.  
+For that, we need a `CustomResourceDefinition`
+
+```yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: flighttickets.flights.com
+spec:
+  scope: Namespaced # Either Namespaced or Cluster
+  group: flights.com # The API group used in the resource's apiVersion
+  names: # Names of the resource
+    plural: flighttickets # To be used in the URL: /apis/<group>/<version>/<plural>
+    singular: flightticket # To be used as an alias on the CLI and for display
+    kind: FlightTicket # Normally the CamelCased singular type. Your resource manifests use this
+    shortNames: # Allow shorter string to match your resource on the CLI
+    - ft
+  versions: # List of versions supported by this CustomResourceDefinition
+    - name: v1
+      served: true # Each version can be enabled/disabled by this Served flag
+      storage: true # One and only one version must be marked as the storage version
+      schema: # Defines all the parameters (fields and type of values) that can be specified under the spec section
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                from:
+                  type: string
+                to:
+                  type: string
+                number:
+                  type: integer
+                  minimum: 1 # We can also specify validation values like minimum and maximum
+                  maximum: 10
+```
+
+We can now create the `CRD` with the usual command
+
+```console
+$ kubectl create -f flightticket-custom-definition.yml
+customresourcedefinition.apiextensions.k8s.io/flighttickets.flights.com created
+```
+
+and manage its resources
+
+```yaml
+apiVersion: flights.com/v1
+kind: FlightTicket
+metadata:
+  name: my-flight-ticket
+spec:
+  from: Mumbai
+  to: London
+  number: 2
+```
+
+```console
+$ kubectl create -f flightticket.yml
+flightticket.flights.com/my-flight-ticket created
+
+$ kubectl get ft
+NAME               AGE
+my-flight-ticket   18s
+
+$ kubectl delete -f flightticket.yml
+flightticket.flights.com "my-flight-ticket" deleted from default namespace
+```
+
+That solves the first part of our problem: being able to create and manage any kind of object type that we want on Kubernetes.  
+But this only allows us to create, manage and store these objects through the Kubernetes API (which then stores them in etcd). Without a controller, Kubernetes does not know what additional actions should be performed (for example, when a FlightTicket is created or modified).  
+The second part is building a controller that can watch when these resources are created and perform actions based on the resource's specification.
+
+```text
+User
+  │
+  │ create/update FlightTicket
+  ▼
+API Server
+  │
+  ├──────────────► etcd
+  │
+  ▼
+Custom Controller
+  │
+  │ watches API
+  ▼
+External API
+```
+
+> [!NOTE]
+>
+> The resource controller should not read from etcd directly.  
+> It reads objects through the Kubernetes API server (typically via client-go/controller-runtime), even though the object is physically stored in etcd.
+
+Now we need to monitor the status of the objects and perform the actions on the corresponding external services, through the custom controller.  
+A controller is any process or code that runs in a loop and continuously monitors the Kubernetes cluster, listening to events of specific objects being changed and performing the appropriate actions in response.
+
+Developing a controller in a non-native language (like Python) may be challenging as the calls to the API may become expensive and we will need to create our own queuing and caching mechanism.  
+Developing the controller in Go instead allows us to use the Kubernetes Go Client, which provides support for other libraries like shared informers (that provide caching and queuing mechanisms), which can help us build controllers easily.
+
+In order to build a custom controller, you can take a look at the repository [sample-controller](https://github.com/kubernetes/sample-controller).  
+We can customize the file `controller.go` with our custom logic.
+
+```Go
+package flightticket
+
+var controllerKind =
+    flightsv1.SchemeGroupVersion.WithKind("FlightTicket")
+
+// < Code hidden >
+
+// Run begins watching and syncing.
+func (dc *FlightTicketController) Run(workers int,
+    stopCh <-chan struct{}) {
+    // ...
+}
+
+// < Code hidden >
+
+// Call BookFlightAPI
+func (dc *FlightTicketController) callBookFlightAPI(obj interface{}) {
+    // ...
+}
+
+// < A lot of code hidden >
+```
+
+We can then build our custom controller
+
+```console
+$ go build -o sample-controller .
+go: downloading k8s.io/client-go v0.0.0-20211001003700-dbfa30b9d908
+go: downloading golang.org/x/text v0.3.6
+```
+
+and run it specifying the `kubeconfig` file, which the controller can use to authenticate to the Kubernetes API.
+
+```console
+$ ./sample-controller -kubeconfig=$HOME/.kube/config
+I1013 02:11:07.489479 40117 controller.go:115] Setting up event handlers
+I1013 02:11:07.489701 40117 controller.go:156] Starting FlightTicket controller
+```
+
+Once the controller is ready, we can decide how to distribute it.  
+We don't want to build and run it each time; instead, we may package the controller in a Docker image, and then run it inside the cluster as a `Pod` or a `Deployment`.
+
+We've seen until now the **CRD** and the **Custom Controller**, which are two separate entities that are necessary to make use of **custom resources** with a behavior.  
+However, these two entities can be packaged together to be deployed as a single entity using the **operator framework**.
+
+For example, by deploying the flight operator, it internally creates the CRD and also deploys the custom controller as a `Deployment`.
+
+![Operator framework](./images/06-operator-framework.png "Operator framework")
+
+But the operator framework can do much more than just deploying those two components.  
+For example, one of the most popular operators is the etcd operator, which provides the following CRDs, controllers and capabilities:
+
+| CRD         | custom controller  | capability                        |
+| ----------- | ------------------ | --------------------------------- |
+| EtcdCluster | Etcd controller    | deploy and manage an etcd cluster |
+| EtcdBackup  | Backup controller  | manage backups                    |
+| EtcdRestore | Restore controller | manage restore operations         |
+
+And you can manage the above operations by simply creating a custom resource.
+
+Kubernetes operators typically do what a human operator would do to manage a specific application (installing it, maintaining it, taking backups and restoring them when needed).
+
+Many operators are available on [OperatorHub](https://operatorhub.io/), where you can find operators for many popular applications.
 
 ---
 
