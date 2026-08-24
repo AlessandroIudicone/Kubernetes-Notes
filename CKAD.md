@@ -6583,6 +6583,355 @@ Many operators are available on [OperatorHub](https://operatorhub.io/), where yo
 
 ---
 
+## Helm Fundamentals
+
+Kubernetes is really powerful in managing complex infrastructures at scale, but we humans tend to struggle with this complexity.
+
+For example, even a relatively simple WordPress site might need the following:
+
+- a `Deployment` with the application;
+- a `PersistentVolume` and a `PersistentVolumeClaim` to store the database;
+- a `Service` to expose the web server;
+- a `Secret` to store the admin password;
+- and more if you want extra capabilities.
+
+```text
+                        / \
+                       /   \                       + - - - - - - +
+                      /  ^  \                      '             '
+                     /       \                     '     PVC     '
+                    / Service \                    '             '
+                   /___________\                   + - - - - - - +
+
+      +---------------------------------------+    +-------------+
+      |              Deployment               |    |             |
+      |                                       |    |     PV      |
+      |   ( * )        ( * )        ( * )     |    |             |
+      |   Pod 1        Pod 2        Pod 3     |    +-------------+
+      +---------------------------------------+
+
+        .---------.              +------------------+
+       /  (  W  )  \             |                  |
+      |  WordPress  |            |      Secret      |
+       \           /             |                  |
+        '---------'              +------------------+
+```
+
+For every object, we might need a separate YAML file: `deployment.yaml`, `pv.yaml`, `pvc.yaml`, `service.yaml` and `secret.yaml`.  
+Then, at application creation, we need to run `kubectl apply` on every YAML file.  
+We also need to identify all the manifests concerned whenever a change is needed, carefully modify them, and then apply the changes.  
+Finally, when we delete the application, we need to `kubectl delete` all of them.
+
+> [!CAUTION]
+>
+> You could use a single YAML file for all the resources instead of having one for each, but it will probably make it even harder to identify which parts are responsible for the required resources.
+
+Helm changes this paradigm.
+If Kubernetes takes care of making all the individually declared objects exist in our cluster, Helm takes care of the representation of an application as a whole.  
+Helm looks at those objects as part of one big package, and that's why it's also defined as a package manager for Kubernetes.  
+We don't tell Helm which objects it should touch, we just tell it instead what package we want it to act on.
+
+With Helm, instead of having multiple manifests in multiple YAML files, you can specify all the (default) values in the `values.yaml` file of the chart.  
+
+```yaml
+## User of the application
+## ref: https://github.com/bitnami/charts/blob/main/bitnami/wordpress/values.yaml
+##
+wordpressUsername: user
+
+## Application password
+## Defaults to a random 10-character alphanumeric string...
+## ref: https://github.com/bitnami/charts/blob/main/bitnami/wordpress/values.yaml
+##
+# wordpressPassword:
+
+## Admin email
+## ref: https://github.com/bitnami/charts/blob/main/bitnami/wordpress/values.yaml
+##
+wordpressEmail: user@example.com
+
+## First name
+## ref: https://github.com/bitnami/charts/blob/main/bitnami/wordpress/values.yaml
+##
+wordpressFirstName: FirstName
+
+## Last name
+## ref: https://github.com/bitnami/charts/blob/main/bitnami/wordpress/values.yaml
+##
+wordpressLastName: LastName
+```
+
+The first step is to convert relevant values from the manifest files to variables.  
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wordpress
+  labels:
+    app: wordpress
+spec:
+  selector:
+    matchLabels:
+      app: wordpress
+      tier: frontend
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: wordpress
+        tier: frontend
+    spec:
+      containers:
+      - image: {{ .Values.image }}
+        name: wordpress
+```
+
+```yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: wordpress-pv
+spec:
+  capacity:
+    storage: {{ .Values.storage }}
+  accessModes:
+  - ReadWriteOnce
+  gcePersistentDisk:
+    pdName: wordpress-2
+    fsType: ext4
+```
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wp-pv-claim
+  labels:
+    app: wordpress
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.storage }}
+```
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wordpress-admin-password
+data:
+  key: {{ .Values.passwordEncoded }}
+```
+
+Then, those variable values are defined in the `values.yaml` file, for example:
+
+```yaml
+image: wordpress:4.8-apache
+storage: 30Gi
+passwordEncoded: SGVsbG8sIEFsZXNzYW5kcm8ncyBub3RlcyBoZXJl
+```
+
+> [!WARNING]
+>
+> Values files are not a secure secret store.  
+> Sensitive values placed in values.yaml can be exposed in source control or Helm configuration.
+
+Finally, you can install it with:
+
+```bash
+helm install wordpress ./wordpress
+```
+
+> [!NOTE]
+>
+> A chart can be installed from a repository, a local directory, an archive, and also directly from an OCI registry.  
+> For example, all the following are valid:
+>
+> - `helm install wordpress bitnami/wordpress`
+> - `helm install wordpress ./wordpress`
+> - `helm install wordpress https://example.com/wordpress-1.0.0.tgz`
+> - `helm install wordpress oci://registry-1.docker.io/bitnamicharts/wordpress`
+>
+> The same applies to the `helm upgrade` command.
+
+Furthermore, you can set:
+
+- custom settings in another specific file that you can give as input, with the `-f` option
+
+  ```bash
+  helm install my-release ./mychart -f my-values.yaml
+  ```
+
+- custom settings via specific variables, with the `--set` option
+
+  ```bash
+  helm install my-release ./mychart --set image.tag=1.2.3
+  ```
+
+> [!TIP]
+>
+> Keep in mind that:
+>
+> - the `values.yaml` of the chart represents the default configuration;
+> - the values passed with the `-f` parameter take precedence over the default values and, if present, override them;
+> - the values passed explicitly with the `--set` option take precedence over the previous two and, if present, override them both.
+
+So a combination of templates + the values gives us the final version of definition files that can be used to deploy the application.  
+Together, the templates, values, and chart metadata form a Helm chart.
+
+```text
+         CHART
+           │
+    +      │
+    │      │
+  VALUES   │
+    │      │
+    └───┬──┘
+        ▼
+Template rendering
+        │
+        ▼
+Kubernetes manifests
+        │
+        ▼
+  Kubernetes API
+        │
+        ▼
+       etcd
+```
+
+A single Helm chart may be used to deploy a simple application and has:
+
+- the template files;
+- the values.yaml file with the variables;
+- `Chart.yaml` with information about the chart itself.
+
+We can create our own chart for the application or explore the existing charts from [Artifact Hub](https://artifacthub.io/) uploaded from other users.  
+You can search for them either using the web interface or the CLI
+
+```console
+$ helm search hub wordpress
+URL                                                     CHART VERSION   APP VERSION             DESCRIPTION
+https://artifacthub.io/packages/helm/slybase-wo...      5.5.3           7.0.1                   Using the official WordPress image. This chart ...
+https://artifacthub.io/packages/helm/wordpress-...      1.0.7           7.0.4                   WordPress is the world's most popular blogging ...
+https://artifacthub.io/packages/helm/quench-wor...      0.0.10          7.0.4                   Hardened WordPress CMS (PHP-FPM + nginx) on a 0...
+https://artifacthub.io/packages/helm/kube-wordp...      0.1.0           1.1                     this is my wordpress package
+https://artifacthub.io/packages/helm/wordpress-...      1.0.2           1.0.0                   A Helm chart for deploying Wordpress+Mariadb st...
+...
+```
+
+Artifact Hub is the community-driven chart repository, but there are other repositories as well, like the Bitnami Helm repository.  
+To search for charts in other repositories, you must first add a repository to the local Helm setup
+
+```console
+$ helm repo add bitnami https://charts.bitnami.com/bitnami
+$ helm search repo wordpress
+NAME                                    CHART VERSION   APP VERSION     DESCRIPTION
+bitnami/wordpress                       30.0.9          6.9.4           WordPress is the world's most popular blogging ...
+bitnami/wordpress-intel                 2.1.31          6.1.1           DEPRECATED WordPress for Intel is the most popu...
+helm-helm-stable-proxy/wordpress        9.0.3           5.3.2           DEPRECATED Web publishing platform for building...
+```
+
+```console
+$ helm repo list
+NAME      URL
+bitnami   https://charts.bitnami.com/bitnami
+```
+
+After finding the chart, the next step is to install it on the cluster with the `helm install` command, followed by the release name and the chart name.  
+When this command is run, the Helm chart is downloaded from the repository and extracted, and its resources are then installed on the cluster.
+
+Each installation of a chart is called a "Release"; each release has a release name (which is the one you specify with the `helm install` command).  
+For instance, you can install the same application using the same chart multiple times by changing the release name each time you run the command
+
+```bash
+helm install release-1 bitnami/wordpress
+helm install release-2 bitnami/wordpress
+helm install release-3 bitnami/wordpress
+```
+
+In the case above, we have three releases of the same chart.
+
+To list installed packages, run the `helm list` command
+
+```console
+$ helm list
+NAME            NAMESPACE       REVISION        UPDATED                                         STATUS          CHART                   APP VERSION
+release-1       default         1               2026-08-24 10:52:08.679212786 +0200 CEST        deployed        wordpress-30.0.9        6.9.4
+release-2       default         1               2026-08-24 10:52:15.301456789 +0200 CEST        deployed        wordpress-30.0.9        6.9.4
+release-3       default         1               2026-08-24 10:52:21.933218456 +0200 CEST        deployed        wordpress-30.0.9        6.9.4
+```
+
+> [!NOTE]
+>
+> Chart version and app version are different concepts.
+
+to uninstall packages, run the `helm uninstall` command
+
+```console
+$ helm uninstall release-1
+release "release-1" uninstalled
+```
+
+you can also download the chart without uninstalling with the `helm pull` command
+
+```console
+$ helm pull --untar bitnami/wordpress
+$ ls wordpress
+Chart.yaml  README.md  charts  templates  values.yaml
+```
+
+The goal is to manually edit the `values.yaml` file to change the required values, and then install it later by specifying the path to that particular directory.
+
+```bash
+helm install release-4 ./wordpress
+```
+
+Helm maintains a Release associated with each installation; then, each `helm upgrade` creates a new revision, and you can roll back to a specific revision with the `helm rollback` command.
+
+```text
+Chart + Values
+      │
+      ▼
+   Release
+      │
+      ├── revision 1
+      ├── revision 2
+      └── revision 3
+```
+
+Useful commands:
+
+- `helm --help`: get information on the tool, the available actions, variables and commands;
+- `helm env`: retrieve the Helm client environment information;
+- `helm version`: get information on the Helm version;
+- `--debug`: flag that can be added to other Helm commands (e.g. `helm install --debug`) to enable verbose output;
+- `helm install <release> <chart> -f values.yaml`: install the application defined in the `values.yaml`;
+- `helm install --dry-run <release> <chart>`: simulate the chart installation without actually performing it;
+- `helm template <release> <chart>`: render the chart locally (it generates the Kubernetes manifests) without installing it (e.g. `helm template wordpress ./wordpress` or `helm template wordpress bitnami/wordpress`);
+- `helm history <release>`: see the different revisions of a release;
+- `helm status <release>`: check the status of the release;
+- `helm get values <release>`: retrieve the values used by a given release;
+- `helm upgrade <release> <chart> -f values.yaml`: modify the application with the new values provided in the `values.yaml` file;
+- `helm rollback <release>`: roll back to the previous revision;
+- `helm rollback <release> [REVISION]`: roll back to a specific revision;
+- `helm uninstall <release>`: uninstall the application;
+- `helm list -A`: list all the releases in all namespaces;
+- `helm search hub <words-to-search>`: search charts in the Artifact Hub;
+- `helm search repo <words-to-search>`: search charts in the locally configured repositories;
+- `helm show values <chart>`: check the values.yaml of a chart before installing it;
+- `helm pull <chart>`: download the chart as an archive;
+- `helm pull --untar <chart>`: download the chart and extract it;
+- `helm repo add <repo-name> <repo-url>`: add a new chart repository, e.g. `helm repo add bitnami https://charts.bitnami.com/bitnami`;
+- `helm repo list`: list the locally configured repositories;
+- `helm repo update`: update the local indexes of the repositories.
+
+---
+
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
 The exam lasts 2 hours and typically includes around 15–20 performance-based tasks.
