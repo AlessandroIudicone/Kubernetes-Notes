@@ -6932,6 +6932,1291 @@ Useful commands:
 
 ---
 
+## Kustomize Basics
+
+Kustomize lets us customize existing Kubernetes manifests without modifying the original YAML files.  
+This is particularly useful when the same application needs different configurations for different environments: it allows to reuse our configurations and only modify what needs to be changed on a per-environment basis (avoiding to repeat the configuration manifests both for the common and different parts).
+
+Kustomize comes built-in within the Kubectl; anyway, you may want to install Kustomize CLI separately to get the latest version.
+
+---
+
+### The kustomization.yaml file and the folder structure
+
+The `kustomization.yaml` file describes:
+
+- the resources that should be included;
+- the transformations and customizations that should be applied to them.
+
+> [!TIP]
+>
+> Just like any other Kubernetes resource file, you can set the `apiVersion` and `kind` properties on a `kustomization.yaml` file
+>
+> ```yaml
+> apiVersion: kustomize.config.k8s.io/v1beta1
+> kind: Kustomization
+>
+> resources:
+> - nginx-deployment.yaml
+> - nginx-service.yaml
+>
+> commonLabels:
+>   goal: CKAD
+> ```
+>
+> They are technically optional, Kustomize will pick up default values, but you can hardcode those values in order to prevent breaking changes in the future.
+
+We then need to define the folder structure in order to correctly run the `kustomize build <directory>` command, which will:
+
+1) import the resources defined in the manifest files;
+2) apply the transformations defined in the kustomization file;
+3) return the final configurations.
+
+For example, the following one is a compliant structure
+
+```yaml
+kubernetes_manifests/
+├── nginx-deployment.yaml
+├── nginx-service.yaml
+└── kustomization.yaml
+```
+
+with the following contents
+
+```yaml
+# Kubernetes resources to be managed by Kustomize
+resources:
+- nginx-deployment.yaml
+- nginx-service.yaml
+
+# Customizations that need to be made
+commonLabels:
+  goal: CKAD
+```
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: nginx
+  template:
+    metadata:
+      labels:
+        component: nginx
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+```
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-loadbalancer-service
+spec:
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 3000
+  selector:
+    component: nginx
+  type: LoadBalancer
+```
+
+---
+
+### Building and applying Kustomize configurations
+
+When running `kustomize build <directory>`, Kustomize looks for a file named, by default, `kustomization.yaml`, in the specified directory.
+
+The command `kustomize build kubernetes_manifests/`, will generate the manifests as follows
+
+```console
+$ kustomize build kubernetes_manifests
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    goal: CKAD
+  name: nginx-loadbalancer-service
+spec:
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 3000
+  selector:
+    goal: CKAD
+    component: nginx
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    goal: CKAD
+  name: nginx-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      goal: CKAD
+      component: nginx
+  template:
+    metadata:
+      labels:
+        goal: CKAD
+        component: nginx
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+```
+
+Note that the Kustomize command does not apply or deploy those Kubernetes resources; it instead only returns the rendered result.  
+If we want to apply those configurations to a cluster, we need to redirect this output in the `kubectl apply` command, for example with the use of the "pipe" Linux utility as follows
+
+```bash
+kustomize build kubernetes_manifests/ | kubectl apply -f -
+```
+
+or, you can also do this natively with the command
+
+```bash
+kubectl apply -k kubernetes_manifests/
+```
+
+You can also delete the declared resources with the `delete` commands
+
+```bash
+# Piping
+kustomize build kubernetes_manifests/ | kubectl delete -f -
+# Natively
+kubectl delete -k kubernetes_manifests/
+```
+
+---
+
+### Organizing resources into directories
+
+In some cases, we would like to separate configuration parts in different folders in a way that makes more sense
+
+```text
+kubernetes/
+├───api/
+│   ├───api-deployment.yaml
+│   └───api-service.yaml
+└───db/
+    ├───db.deployment.yaml
+    └───db.service.yaml
+```
+
+Now we ne can perfrom `kubectl` commands relatively to a directory and will be performed to all the files inside the folder
+
+```bash
+kubectl apply -f kubernetes/api
+kubectl apply -f kubernetes/db
+```
+
+If the structure grows (quantity of directories and subdirectory, number of resources managed), it starts to get difficult to apply what is needed to a specific environment and application.  
+We can instead create a `kustomization.yaml` file in the root of our directory and list there all the resources we want to manage
+
+```text
+kubernetes_manifests/
+├───kustomization.yaml
+├───api/
+│   ├───api-deployment.yaml
+│   └───api-service.yaml
+└───db/
+    ├───db.deployment.yaml
+    └───db.service.yaml
+```
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- api/api-deployment.yaml
+- api/api-service.yaml
+- db/db-deployment.yaml
+- db/db-service.yaml
+```
+
+And so when applying this configuration it will only be just one command, without needing to go in each of the required subdirectories
+
+```bash
+# Piping
+kustomize build kubernetes_manifests/ | kubectl apply -f -
+# Natively
+kubectl apply -k kubernetes_manifests/
+```
+
+If the number of directories grows excessively, the `resources` list contained in the `kustomization.yaml` file will start to get fairly long.
+
+Although this is technically a valid solution, a way to manage this is adding separate `kustomization.yaml` files in the required subdirectories
+
+```text
+kubernetes_manifests/
+├───kustomization.yaml
+├───api/
+│   ├───api-deployment.yaml
+│   ├───api-service.yaml
+│   └───kustomization.yaml
+├───db/
+│   ├───db-deployment.yaml
+│   ├───db-service.yaml
+│   └───kustomization.yaml
+├───cache/
+│   ├───cache-deployment.yaml
+│   ├───cache-service.yaml
+│   └───kustomization.yaml
+└───kafka/
+    ├───kafka.deployment.yaml
+    ├───kafka.service.yaml
+    └───kustomization.yaml
+```
+
+in which we can define the resources with a more granular criteria.  
+In this way, `kubernetes_manifests/db/kustomization.yaml` will be, for example
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- db-deployment.yaml
+- db-service.yaml
+```
+
+Then, in the root `kubernetes_manifests/kustomization.yaml` we'll provide the paths of the different directories that we want to include
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- api/
+- db/
+- cache/
+- kafka/
+```
+
+and when we do that, Kustomize will look for a `kustomization.yaml` file in those directories and import all of those.  
+This approach will allow us to keep the structure as clean as possible and to apply the changes still with one command.
+
+---
+
+### Transformers
+
+Kustomize has several built-in transformers (you can even create your own).
+
+Here some example of the default transformers:
+
+- **commonLabels**: adds a label to all Kubernetes resources;
+- **namePrefix/Suffix**: adds a common prefix or suffix to all resource names;
+- **Namespace**: adds a common namespace to all resources;
+- **commonAnnotations**: adds an annotation to all Kubernetes resources;
+- **images**: updates the specified image key values found in paths that include `containers` and `initcontainers` sub-paths. If found, the `image` key value is customized by the values set in the `newName`, `newTag`, and `digest` fields. The `name` field should match the `image` key value in a resource.
+
+> [!NOTE]
+>
+> `commonLabels` can also update selectors where appropriate.  
+> This is useful for keeping labels and selectors consistent,
+> but it should be used carefully because changing selectors can affect how resources identify their Pods.
+
+Let's make some examples starting from the following definition file
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: nginx
+  template:
+    metadata:
+      labels:
+        component: nginx
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+```
+
+We already seen the `commonLabel` transformer in action.
+
+With the `namespace` transformer, applying the following kustomization.yaml
+
+```yaml
+namespace: lab
+```
+
+will result in the following output
+
+```diff
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
++ namespace: lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: nginx
+  template:
+    metadata:
+      labels:
+        component: nginx
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+```
+
+With the `namePrefix/Suffix` transformer instead, in this example we want to add the prefix `CKAD-` and the suffix `-dev`.  
+So with the following kustomization.yaml
+
+```yaml
+namePrefix: CKAD-
+nameSuffix: -dev
+```
+
+the result will be this one
+
+```diff
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+- name: nginx-deployment
++ name: CKAD-nginx-deployment-dev
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: nginx
+  template:
+    metadata:
+      labels:
+        component: nginx
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+```
+
+Making an example of the `commonAnnotations` transformer, with the following kustomization.yaml
+
+```yaml
+commonAnnotations:
+  branch: master
+```
+
+the result will be this one
+
+```diff
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
++ annotations:
++   branch: master
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: nginx
+  template:
+    metadata:
++     annotations:
++       branch: master
+      labels:
+        component: nginx
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+```
+
+If using the `image` transformer for changing the image repository from `nginx` to `haproxy`, we can use this configuration
+
+```yaml
+images:
+  - name: nginx
+    newName: haproxy
+```
+
+and have this result
+
+```diff
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: nginx
+  template:
+    metadata:
+      labels:
+        component: nginx
+    spec:
+      containers:
+-     - image: nginx
++     - image: haproxy
+        name: nginx
+```
+
+If we instead only want to change the tag of the image, without changing the image repository, we can still do that with the `image` transformer with the following configuration
+
+```yaml
+images:
+  - name: nginx
+    newTag: 2.4
+```
+
+and obtain this result
+
+```diff
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: nginx
+  template:
+    metadata:
+      labels:
+        component: nginx
+    spec:
+      containers:
+-     - image: nginx
++     - image: nginx:2.4
+        name: nginx
+```
+
+With the `image` transformer we can also override both the image repository and its tag, the digest and any combination; also, we can set more than one override in the `kustomization.yaml`
+
+```yaml
+images:
+  - name: postgres
+    newName: my-registry/my-postgres
+    newTag: v1
+  - name: nginx
+    newTag: 1.8.0
+  - name: my-demo-app
+    newName: my-app
+  - name: alpine
+    digest: sha256:25a0d4
+```
+
+---
+
+### Patches
+
+Kustomize patches provide another method to modify Kubernetes configurations.
+
+Unlike default transformers, patches provide a more "surgical" approach to target one or more specific sections in a Kubernetes resource.  
+This is useful in situations like when we need to update the number of replicas in a specific `Deployment`.
+
+To create a patch we need to provide 3 parameters:
+
+- **operation type**: the most used are "add", "remove" or "replace";
+- **target**: what resource should this patch be applied on:
+  - Kind;
+  - API version / group;
+  - name;
+  - namespace;
+  - labelSelector;
+  - annotationSelector;
+- **value**: what is the value that will either be replaced or added with (only needed for add or replace operations).
+
+Let's make some examples starting from the same Deployment definition as before
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: nginx
+  template:
+    metadata:
+      labels:
+        component: nginx
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+```
+
+If we want to change the `metadata.name` to `web-deployment`, we'll add the following content to the `kustomization.yaml`
+
+```yaml
+patches:
+  - target:
+      kind: Deployment
+      name: nginx-deployment
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: web-deployment
+```
+
+If we want to change the `spec.replicas` to `5`, we'll add the following content to the `kustomization.yaml`
+
+```yaml
+patches:
+  - target:
+      kind: Deployment
+      name: nginx-deployment
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 5
+```
+
+> [!NOTE]
+>
+> The `|-` part is for stating that we are applying an "inline patch"
+
+This is the structure of a **JSON 6902** type of patch;  
+There is also another way, which is the **strategic merge patch**, in which we only put the manifest without the stuff that we don't want to change.
+
+```yaml
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: nginx-deployment
+      spec:
+        replicas: 5
+```
+
+For both **JSON 6902** and **strategic merge patch**, there are two different ways to define a patch:  
+The first one is inline, with which we've been working until now, where we define the patch inside the same `Kustomization.yaml`;  
+the other one is by providing a separate file in which we'll provide the patch, for example
+
+- with the **JSON 6902** using the following `Kustomization.yaml`
+
+  ```yaml
+  patches:
+    - path: replica-patch.yaml
+      target:
+        kind: Deployment
+        name: nginx-deployment
+  ```
+
+  and the following `replica-patch.yaml`
+
+  ```yaml
+  - op: replace
+    path: /spec/replicas
+    value: 5
+  ```
+
+- with the **strategic merge patch** using the following `Kustomization.yaml`
+
+  ```yaml
+  patches:
+    - replica-patch.yaml
+  ```
+
+  and the following `replica-patch.yaml`
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: nginx-deployment
+  spec:
+    replicas: 5
+  ```
+
+Let's say now that we want to replace the value of `spec.template.metadata.labels.component` to `web`
+
+- this is what we need using an inline JSON 6902 patch
+
+  ```yaml
+  patches:
+    - target:
+        kind: Deployment
+        name: nginx-deployment
+      patch: |-
+        - op: replace
+          path: /spec/template/metadata/labels/component
+          value: web
+  ```
+
+- this is what we need using a multi-file strategic merge patch:
+
+  ```yaml
+  patches:
+    - label-patch.yaml
+  ```
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: nginx-deployment
+  spec:
+    template:
+      metadata:
+        labels:
+          component: web
+  ```
+
+In this example we'll add a new key/value `goal: CKAD` in `spec.template.metadata.labels`
+
+- this is what we need using an inline JSON 6902 patch
+
+  ```yaml
+  patches:
+    - target:
+        kind: Deployment
+        name: nginx-deployment
+      patch: |-
+        - op: add
+          path: /spec/template/metadata/labels/goal
+          value: CKAD
+  ```
+
+- this is what we need using a multi-file strategic merge patch:
+
+  ```yaml
+  patches:
+    - label-patch.yaml
+  ```
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: nginx-deployment
+  spec:
+    template:
+      metadata:
+        labels:
+          goal: CKAD
+  ```
+
+In this example we'll remove the `spec.template.metadata.labels` `goal: CKAD` set in the example above
+
+- this is what we need using an inline JSON 6902 patch
+
+  ```yaml
+  patches:
+    - target:
+        kind: Deployment
+        name: nginx-deployment
+      patch: |-
+        - op: remove
+          path: /spec/template/metadata/labels/goal
+  ```
+
+- this is what we need using a multi-file strategic merge patch:
+
+  ```yaml
+  patches:
+    - label-patch.yaml
+  ```
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: nginx-deployment
+  spec:
+    template:
+      metadata:
+        labels:
+          goal: null
+  ```
+
+> [!TIP]
+>
+> To remove a field using a strategic merge patch, it can be set to `null`.
+
+Until now we have seen how to add, replace or remove keys to a dictionary; let's now see how to perform those operations on a list.
+
+Starting from the manifest given above
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: nginx
+  template:
+    metadata:
+      labels:
+        component: nginx
+    spec:
+      containers:
+      - image: web
+        name: nginx
+```
+
+If we want to change the name and the image of the container
+
+- this is what we need using an inline JSON 6902 patch
+
+  ```yaml
+  patches:
+    - target:
+        kind: Deployment
+        name: nginx-deployment
+      patch: |-
+        - op: replace
+          path: /spec/template/spec/containers/0
+          value:
+            name: haproxy
+            image: haproxy
+  ```
+
+- this is what we need using a multi-file strategic merge patch, using the following `Kustomization.yaml`
+
+  ```yaml
+  patches:
+    - image-patch.yaml
+  ```
+
+  and the following `image-patch.yaml`:
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: nginx-deployment
+  spec:
+    template:
+      spec:
+        containers:
+          - name: web
+            image: haproxy
+  ```
+
+> [!NOTE]
+>
+> The number at the end of `path: /spec/template/spec/containers/0` specifies the index of the object to manipulate.
+
+If we want to add a second container on that list
+
+- this is what we need using an inline JSON 6902 patch
+
+  ```yaml
+  patches:
+    - target:
+        kind: Deployment
+        name: nginx-deployment
+      patch: |-
+        - op: add
+          path: /spec/template/spec/containers/-
+          value:
+            name: web2
+            image: haproxy
+  ```
+
+  > [!NOTE]
+  >
+  > The `-` at the end of `path: /spec/template/spec/containers/-` means that we want to add the container item at the end of the list.  
+  > If we wanted to add it at the beginning of the list, we should use the `0` index.
+
+- this is what we need using a multi-file strategic merge patch, using the following `Kustomization.yaml`
+
+  ```yaml
+  patches:
+    - image-patch.yaml
+  ```
+
+  and the following `image-patch.yaml`:
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: nginx-deployment
+  spec:
+    template:
+      spec:
+        containers:
+          - name: web2
+            image: haproxy
+  ```
+
+  > [!NOTE]
+  >
+  > For `containers`, the `name` field is used as the merge key.  
+  > If the patch contains a container whose `name` matches an existing container, that container is merged with the patch.  
+  > If no matching container exists, a new container is added.  
+  >
+  > Since in this case no existing container has the name `web2`, the container is added rather than merged with an existing one.
+
+Now, starting from the following manifest
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      component: nginx
+  template:
+    metadata:
+      labels:
+        component: nginx
+    spec:
+      containers:
+      - image: nginx
+        name: nginx
+      - image: mongo
+        name: database
+```
+
+we'll see how to delete the second container from that list.
+
+- this is what we need using an inline JSON 6902 patch
+
+  ```yaml
+  patches:
+    - target:
+        kind: Deployment
+        name: api-deployment
+      patch: |-
+        - op: remove
+          path: /spec/template/spec/containers/1
+  ```
+
+- this is what we need using a multi-file strategic merge patch, using the following `Kustomization.yaml`
+
+  ```yaml
+  patches:
+    - remove-container-patch.yaml
+  ```
+
+  and the following `remove-container-patch.yaml`:
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: api-deployment
+  spec:
+    template:
+      spec:
+        containers:
+          - $patch: delete
+            name: database
+  ```
+
+  > [!NOTE]
+  >
+  > In this case, considering that we cannot list something that we want to delete within the strategic merge, we have to use the delete directive `$patch: delete`.
+
+---
+
+### Base and overlays
+
+Kustomize commonly uses a base and overlays structure to manage configurations that are shared across multiple environments:
+
+- **base**: the base configuration, which represents the common part across the different environments, along with the default values;
+- **overlays**: environment-specific configurations that customize the base according to the requirements of each environment.
+
+The combination of a base and an overlay generates the final manifests.
+
+> [!NOTE]
+>
+> `base` and `overlays` are not fundamental mechanisms of Kustomize: they are instead a common pattern for organizing Kustomization files.
+
+When using this pattern, the folder structure can follow a structure similar to the following:
+
+- a `base` folder, containing the common configuration shared across the different environments;
+- an `overlays` folder, with sub-folders representing the different environments and containing the customizations and resources specific to each environment.
+
+```text
+kubernetes/
+├───base/
+│   ├───kustomization.yaml
+│   ├───nginx-deploy.yaml
+│   ├───service.yaml
+│   └───redis-deploy.yaml
+└───overlays/
+    ├───dev/
+    │   ├───kustomization.yaml
+    │   └───config-map.yaml
+    ├───staging/
+    │   ├───kustomization.yaml
+    │   └───config-map.yaml
+    └───prod/
+        ├───kustomization.yaml
+        └───config-map.yaml
+```
+
+We customize each environment by applying one or more patches on top of the base.
+
+For example, in order to differentiate the nginx `Deployment` you can do as follows:
+
+- `base/kustomization.yaml`
+
+  ```yaml
+  resources:
+    - nginx-deploy.yaml
+    - service.yaml
+    - redis-depl.yaml
+  ```
+
+- `base/nginx-deploy.yaml`
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: nginx-deployment
+  spec:
+    replicas: 1
+  ```
+
+- `overlays/dev/kustomization.yaml`
+
+  ```yaml
+  resources:
+    - ../../base
+
+  patches:
+    - target:
+        kind: Deployment
+        name: nginx-deployment
+      patch: |-
+        - op: replace
+          path: /spec/replicas
+          value: 2
+  ```
+
+- `overlays/prod/kustomization.yaml`
+
+  ```yaml
+  resources:
+    - ../../base
+
+  patches:
+    - target:
+        kind: Deployment
+        name: nginx-deployment
+      patch: |-
+        - op: replace
+          path: /spec/replicas
+          value: 3
+  ```
+
+so that the deployment in the dev environment will have two replicas while in production will have three.
+
+You can also define resource that belong to a specific environment, so for example adding a Grafana instance only on the production enviromnet by
+
+- **adding** a `overlays/prod/grafana-deploy.yaml` Grafana Deployment manifest
+
+- having the following `overlays/prod/kustomization.yaml`
+
+  ```yaml
+  resources:
+    - ../../base
+    - grafana-deploy.yaml
+
+  patches:
+    - target:
+        kind: Deployment
+        name: nginx-deployment
+      patch: |-
+        - op: replace
+          path: /spec/replicas
+          value: 2
+  ```
+
+The `base` and `overlays` directory names are not mandatory. The directory structure can be organized according to the needs of the project.
+
+```text
+kubernetes/
+├── base/
+│   ├── kustomization.yaml
+│   ├── db/
+│   │   ├── db-depl.yaml
+│   │   ├── db-service.yaml
+│   │   └── kustomization.yaml
+│   └── api/
+│       ├── api-depl.yaml
+│       ├── api-service.yaml
+│       └── kustomization.yaml
+└── overlays/
+    ├── dev/
+    │   ├── kustomization.yaml
+    │   ├── db/
+    │   │   ├── db-patch.yaml
+    │   │   └── kustomization.yaml
+    │   └── api/
+    │       ├── api-patch.yaml
+    │       └── kustomization.yaml
+    └── prod/
+        ├── kustomization.yaml
+        ├── db/
+        │   ├── db-patch.yaml
+        │   └── kustomization.yaml
+        ├── api/
+        │   ├── api-patch.yaml
+        │   └── kustomization.yaml
+        └── grafana/
+            ├── grafana-deploy.yaml
+            └── kustomization.yaml
+```
+
+---
+
+### Components
+
+Components allow us to define reusable pieces of configuration logic that can be included in multiple overlays.  
+They are useful when an application has optional features that need to be enabled only in a subset of environments.  
+Unlike overlays, Components are not tied to a specific environment.
+
+For example, we could define a component for monitoring, another one for external database support, and another one for LDAP authentication.  
+Each component can contain its own resources and patches.
+
+A component is defined using a `kustomization.yaml` file with `kind: Component`:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - monitoring-config.yaml
+
+patches:
+  - monitoring-patch.yaml
+```
+
+The component can then be included by an overlay using the `components` field
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+components:
+  - ../../components/monitoring
+```
+
+In this way, the same optional functionality can be reused across multiple overlays without duplicating its configuration.
+
+In order to understand better the components, let's make another example considering an application that is available in three different configurations:
+
+- **Community Edition**: the development/community version of the application;
+- **Premium**: the premium cloud version of the application;
+- **Self Hosted**: the version that is deployed and managed by the customer.
+
+All three configurations share a common base, but each one is represented by a different overlay.
+
+Some optional features, however, need to be enabled only for certain configurations:
+
+- an **external database** is required by both cloud versions (Community Edition and Premium);
+- **caching** is available for Premium and Self Hosted, but not for Community Edition.
+
+Instead of duplicating the configuration for these features in each overlay, we can define them as reusable Components.
+
+![Kustomize Components  example](./images/06-kustomize-components-diagram.png "Kustomize Components example")
+
+For example, we can organize the configuration as follows:
+
+```text
+k8s/
+├── base/
+│   ├── kustomization.yaml
+│   └── application-deployment.yaml
+│
+├── overlays/
+│   ├── community/
+│   │   └── kustomization.yaml
+│   ├── premium/
+│   │   └── kustomization.yaml
+│   └── self-hosted/
+│       └── kustomization.yaml
+│
+└── components/
+    ├── external-db/
+    │   ├── kustomization.yaml
+    │   ├── deployment-patch.yaml
+    │   └── postgres-deploy.yaml
+    │
+    └── caching/
+        ├── kustomization.yaml
+        ├── deployment-patch.yaml
+        └── redis-deploy.yaml
+```
+
+The `external-db` Component could contain the configuration required to connect the application to an external database:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - postgres-deploy.yaml
+
+secretGenerator:
+  - name: postgres-cred
+    literals:
+      - password: postgres123
+
+patches:
+  - deployment-patch.yaml
+```
+
+> [!NOTE]
+>
+> Since we have a database, we defined also a secret for the password of the database, that we are gonna import using the following `deployment-patch.yaml`
+>
+> ```yaml
+> apiVersion: apps/v1
+> kind: Deployment
+> metadata:
+>   name: api-deployment
+> spec:
+>   template:
+>     spec:
+>       containers:
+>         - name: api
+>           env:
+>             - name: DB_PASSWORD
+>               valueFrom:
+>                 secretKeyRef:
+>                   name: postgres-cred
+>                   key: password
+> ```
+>
+> This is only an example. In a real-world environment, passwords and other sensitive values should not be stored directly in the Kustomization files.
+
+The `caching` Component could instead contain the resources and configuration required to enable caching:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - redis-deploy.yaml
+
+patches:
+  - deployment-patch.yaml
+```
+
+The Components can then be included by the appropriate overlays:
+
+- the Community Edition could use only the external database:
+
+  ```yaml
+  apiVersion: kustomize.config.k8s.io/v1beta1
+  kind: Kustomization
+
+  resources:
+    - ../../base
+
+  components:
+    - ../../components/external-db
+  ```
+
+- the Premium version could use both Components:
+
+  ```yaml
+  apiVersion: kustomize.config.k8s.io/v1beta1
+  kind: Kustomization
+
+  resources:
+    - ../../base
+
+  components:
+    - ../../components/external-db
+    - ../../components/caching
+  ```
+
+- the Self Hosted version could use only the caching Component:
+
+  ```yaml
+  apiVersion: kustomize.config.k8s.io/v1beta1
+  kind: Kustomization
+
+  resources:
+    - ../../base
+
+  components:
+    - ../../components/caching
+  ```
+
+This allows the same configuration logic to be reused across multiple overlays without duplicating it.
+
+As the application evolves, the base and the individual overlays can continue to change independently, while the reusable functionality remains encapsulated in the Components. If the implementation of a feature needs to change, we can update the corresponding Component rather than duplicating the same changes across multiple overlays.  
+This makes the configuration easier to maintain and scale as the number of environments and optional features grows.
+
+Here is a comparison about bases, overlays and components.
+
+| Aspect              | Base                 | Overlay                            | Component                         |
+| ------------------- | -------------------- | ---------------------------------- | --------------------------------- |
+| Purpose             | Shared configuration | Environment-specific customization | Reusable optional functionality   |
+| Reusable            | Yes                  | Usually not                        | **Yes, across multiple overlays** |
+| Contains resources  | Yes                  | Yes                                | Yes                               |
+| Can contain patches | Yes                  | Yes                                | Yes                               |
+| Included using      | `resources`          | `resources`                        | `components`                      |
+
+---
+
+### Kustomize vs Helm
+
+Helm and Kustomize partly address the same issue: providing a way to modify Kubernetes applications on a per-environment basis.  
+In order to understand which fits best for our needs between Helm or Kustomize, we need to understand some differences.
+
+Kustomize works directly with Kubernetes YAML manifests, so the resulting resources remain standard Kubernetes manifests.  
+Helm, instead, makes use of Go templates syntax in order to assign variables to properties; therefore, Helm templates are not valid YAML and can easily become hard to read / interpretate.
+
+The projects structure between the two tools is slightly different.
+
+Helm is more than just a tool to customize configurations on a per-environment basis; it is also a complete package manager for the application.
+
+Kustomize does not require learning complex templating systems, so it's easier and simple,  
+whereas Helm is a little bit more complex but carries extra features as well (like conditionals, loops, functions and hooks).
+
+|                       | Kustomize                      | Helm               |
+| --------------------- | ------------------------------ | ------------------ |
+| Input                 | Kubernetes YAML                | Templates          |
+| Modifies              | Overlay / patch / transformers | Values + templates |
+| Template language     | No                             | Go templates       |
+| Packaging             | No                             | Yes                |
+| Package manager       | No                             | Yes                |
+| `values.yaml`         | No                             | Yes                |
+| Releases              | No                             | Yes                |
+| Rollback capabilities | No                             | Yes                |
+| Difficulty            | Lower                          | Higher             |
+
+---
+
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
 The exam lasts 2 hours and typically includes around 15–20 performance-based tasks.
