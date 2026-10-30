@@ -3966,7 +3966,7 @@ Network traffic can be viewed from two perspectives: **ingress** (incoming traff
 For example, in a web application that:
 
 - receives client requests on the web server on port 80;
-- sends a request to the app server exposing an API on port 5000;
+- sends a request to the API server on port 5000;
 - interacts with the database on port 3306.
 
 ```text
@@ -3990,14 +3990,14 @@ For example, in a web application that:
 +----------------+
 ```
 
-Ingress and Egress traffic are divided as follows
+Ingress and Egress traffic are divided as follows:
 
-- for the web server
+- for the web server:
 
   - the incoming traffic from the users on the default port 80 is ingress;
-  - the outgoing request to the app server on port 5000 is egress traffic;
+  - the outgoing request to the API server on port 5000 is egress traffic;
 
-- for the app that serves API:
+- for the API server:
 
   - the incoming traffic from the web server through port 5000 is ingress;
   - the outgoing request to the database on port 3306 is egress traffic;
@@ -4011,15 +4011,20 @@ If we were to list the necessary rules to make this system work, we would have:
 - an ingress rule that accepts HTTP traffic on port 80 on the web server;
 - an egress rule to allow traffic from the web server to port 5000 of the API server;
 - an ingress rule to accept traffic on port 5000 on the API server;
-- an egress rule to allow traffic to port 3306 on the database server;
+- an egress rule to allow traffic from the API server to port 3306 of the database server;
 - an ingress rule on the database server to accept traffic on port 3306.
+
+> [!NOTE]
+>
+> Here "ingress" and "egress" only describe the direction of the traffic, as seen by a specific component.  
+> They have nothing to do with the Kubernetes `Ingress` resource described in the next chapter.
 
 ---
 
-### Need of Network Policies for Kubernetes environments
+### Need for Network Policies in Kubernetes environments
 
-In Kubernetes, each `Node`, `Pod` and `Service` has its own IP address.  
-One of the prerequisites in Kubernetes is that, whatever solution is implemented, the Pods should be able to communicate with each other without having to configure any additional settings (like routes).  
+In Kubernetes, each `Node` and each `Pod` has its own IP address, and most `Services` also get a virtual IP address, the ClusterIP.  
+One of the requirements of the Kubernetes network model is that, whatever solution is implemented, Pods must be able to communicate with each other without any additional configuration (like routes).  
 Pods are part of a flat network where, by default, every Pod can directly communicate with every other Pod without NAT, regardless of which node they run on.
 
 > [!IMPORTANT]
@@ -4029,34 +4034,50 @@ Pods are part of a flat network where, by default, every Pod can directly commun
 > - all ingress traffic is allowed;
 > - all egress traffic is allowed.
 >
-> A Pod becomes isolated only when at least one NetworkPolicy selects it.
+> Isolation is evaluated separately for each direction:
+>
+> - a Pod becomes isolated for **ingress** only when at least one NetworkPolicy selects it and has `Ingress` in its `policyTypes`;
+> - a Pod becomes isolated for **egress** only when at least one NetworkPolicy selects it and has `Egress` in its `policyTypes`.
 
-Coming back to the example made in the previous paragraph, in order to reach that architecture, we can:
+Coming back to the example in the previous section, in order to reach that architecture, we can:
 
 - create a Pod for the front-end, one for the API server and one for the database;
-- create services to expose the pods.
+- create Services to expose the Pods.
 
 However, since by default all Pods can talk to each other, the front-end Pod would also be able to communicate directly with the database Pod.  
-If we want to avoid that (maybe the security team or an audit requires preventing this from happening), that is where we would implement a **Network Policy** to allow traffic to the DB server only from the API server.
+If we want to avoid that (maybe the security team or an audit requires preventing this from happening), that is where we would implement a **Network Policy** to allow traffic to the database Pod only from the API Pod.
 
 ---
 
 ### Network Policies in Kubernetes environments
 
-A `NetworkPolicy` is a namespaced Kubernetes resource that defines which network connections are allowed to and/or from a selected set of Pods.  
-In order to apply a `NetworkPolicy` on a Pod we use labels and selectors: we label the Pod and we use the same label on the `podSelector` field in the `NetworkPolicy`.  
-When building the rule, under `spec.policyTypes` we can specify whether the NetworkPolicy controls Ingress traffic, Egress traffic, or both.  
-Finally, we define the allowed sources or destinations and, optionally, restrict them to specific ports and protocols.  
-Once a Pod is selected by an Ingress `NetworkPolicy`, all ingress traffic is denied unless explicitly allowed by one or more matching `NetworkPolicies`.
+A `NetworkPolicy` (API group `networking.k8s.io/v1`) is a namespaced Kubernetes resource that defines which network connections are allowed to and/or from a selected set of Pods.  
+In order to apply a `NetworkPolicy` to a Pod we use labels and selectors: we label the Pod and we use the same label in the `spec.podSelector` field of the `NetworkPolicy`.  
+`spec.podSelector` selects Pods only in the namespace of the NetworkPolicy; an empty selector (`podSelector: {}`) selects all the Pods of that namespace.  
+When building the policy, under `spec.policyTypes` we can specify whether the NetworkPolicy controls Ingress traffic, Egress traffic, or both.  
+Finally, we define the allowed sources (`ingress[].from`) or destinations (`egress[].to`) and, optionally, restrict them to specific ports and protocols (`ports`).  
+Once a Pod is selected by a NetworkPolicy that has `Ingress` in its `policyTypes`, all ingress traffic to it is denied unless explicitly allowed by the ingress rules of at least one NetworkPolicy that selects it (the same applies to egress).
+
+> [!CAUTION]
+>
+> If `policyTypes` is omitted, Kubernetes sets it automatically: `Ingress` is **always** added, while `Egress` is added only if the policy has `egress` rules.  
+> So a policy with only `egress` rules and no `policyTypes` also isolates the selected Pods for ingress, blocking all their incoming traffic not allowed by other policies:
+>
+> ```console
+> $ kubectl get netpol egress-only-no-types -o jsonpath='{.spec.policyTypes}'
+> ["Ingress","Egress"]
+> ```
+>
+> To avoid surprises, always write `policyTypes` explicitly.
 
 > [!IMPORTANT]
 >
 > NetworkPolicies are additive.  
-> If multiple NetworkPolicies select the same Pod, the allowed traffic is the union of all rules.
+> If multiple NetworkPolicies select the same Pod, the allowed traffic is the union of all their rules.
 >
-> Kubernetes does not evaluate NetworkPolicies in order.
+> Kubernetes does not evaluate NetworkPolicies in order, and there are no "deny" rules: a policy can only add allowed traffic, it can never block traffic allowed by another policy.
 
-In the case above, we would say "only allow ingress traffic from the API Pod on port 3306".  
+In the case above, we would say "only allow ingress traffic from the API Pod on port 3306".
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -4079,34 +4100,46 @@ spec:
       port: 3306
 ```
 
+Note that a `podSelector` inside `from` (without a `namespaceSelector`) selects Pods in the **same namespace** as the NetworkPolicy: if the API Pod runs in another namespace, a `namespaceSelector` is needed too (see below).
+
 > [!IMPORTANT]
 >
 > A NetworkPolicy is allow-based.  
-> You specify what traffic is allowed. Everything else is denied for the selected Pods.
+> You specify what traffic is allowed. Everything else is denied for the selected Pods, in the directions listed in `policyTypes`.  
+> In the example above (`policyTypes` contains only `Ingress`) the egress traffic of the database Pod is not affected.
+
+> [!TIP]
+>
+> The `ports` of a rule are the ports **of the Pod** (numbers or names of container ports), not the ports of a Service: if a Service exposes port 80 with `targetPort: 8080`, the policy must allow port 8080.  
+> If `protocol` is omitted, it defaults to `TCP`.
 
 NetworkPolicies are enforced only if the cluster uses a **Container Network Interface** (CNI) plugin that supports them.  
-Not all network solutions support NetworkPolicies. A few of them that support them are:
+Not all network solutions support NetworkPolicies. Some of those that support them are:
 
-- Kube-router
+- Antrea
 - Calico
 - Cilium
-- Weave Net
+- kube-router
 
-If we use Flannel for example, it does not currently support NetworkPolicies.  
-In any case, even in a cluster configured with a networking solution that does not support NetworkPolicies, we can still create the policies, but they will simply not be enforced.  
-In other words, NetworkPolicies are defined by Kubernetes, but enforcement is delegated to the CNI plugin.
+Weave Net, still mentioned in many courses, also supported them, but the original project is no longer maintained (Weaveworks shut down in 2024).
 
-Thinking about ingress and egress traffic, you could think that:
+Other solutions, like Flannel, only provide connectivity: `flanneld` does not enforce NetworkPolicies by itself.  
+To enforce them, a policy controller must be added next to it (for example with the `netpol.enabled` option of the Flannel Helm chart, which deploys the Kubernetes SIGs `kube-network-policies` controller, or by using Calico for policy and Flannel for networking, the combination known as Canal).  
+In any case, even in a cluster configured with a networking solution that does not support NetworkPolicies, we can still create the policies (without any error or warning), but they will simply not be enforced.  
+In other words, NetworkPolicies are defined by Kubernetes, but enforcement is delegated to the network (CNI) plugin.
+
+Thinking about ingress and egress traffic, you might think that:
 
 - the outgoing response of an incoming request;
 - the incoming response of an outgoing request;
 
-needs a different rule; however no additional rule is needed because NetworkPolicies are stateful: once a connection is allowed, the corresponding return traffic is automatically permitted.  
-So when defining NetworkPolicies, you don't need to worry about response traffic.
+need a separate rule; however, no additional rule is needed because NetworkPolicies are stateful: once a connection is allowed, the corresponding reply traffic is implicitly allowed.  
+So when defining NetworkPolicies, you don't need to worry about response traffic: for example, the database Pod only needs an ingress rule that allows the API Pod, and no egress rule to send its replies.
 
-There are additional selectors that can be used in `NetworkPolicies`, like
+Besides `podSelector`, there are additional selectors that can be used in the `from` (or `to`) list of a rule, like:
 
-- `namespaceSelector`: defines from which namespace the traffic is allowed to reach the pod.
+- `namespaceSelector`: selects namespaces by their labels; the traffic from all the Pods of those namespaces is allowed.  
+  A namespace cannot be selected by name, but the control plane automatically sets the immutable label `kubernetes.io/metadata.name=<namespace name>` on every namespace, which can be used for that.
 
   ```yaml
       - namespaceSelector:
@@ -4114,34 +4147,44 @@ There are additional selectors that can be used in `NetworkPolicies`, like
             kubernetes.io/metadata.name: prod
   ```
 
-- `ipBlock`: defines a range of IP addresses from which to allow traffic to the pod. It's commonly used to allow traffic from external IP addresses or external networks.
+- `ipBlock`: defines a range of IP addresses (CIDR) from which to allow traffic to the Pod. It's commonly used to allow traffic from external IP addresses or external networks.  
+  It should only be used for IPs outside the cluster, since Pod IPs are ephemeral and unpredictable. Sub-ranges can be excluded with `except` (for example `cidr: 192.168.5.0/24` with `except: [192.168.5.128/25]`).
 
   ```yaml
       - ipBlock:
           cidr: 192.168.5.10/32
   ```
 
-The same applies to egress traffic.
+  Keep in mind that the source IP of traffic coming from outside the cluster may be rewritten (for example by a load balancer or by a NodePort Service): whether `ipBlock` sees the original client IP or the IP of a node or load balancer depends on the network plugin and on the environment.
 
-| Selector          | Matches    |
-| ----------------- | ---------- |
-| podSelector       | Pods       |
-| namespaceSelector | Namespaces |
-| ipBlock           | IP ranges  |
+The same selectors can be used in the `to` list of egress rules, to define the allowed destinations.
 
-Those rule selectors can be passed separately (as separate rules) or grouped together (as part of a single rule).
+| Selector                                         | Matches                                         |
+| ------------------------------------------------ | ----------------------------------------------- |
+| `podSelector`                                    | Pods in the same namespace as the NetworkPolicy |
+| `namespaceSelector`                              | All the Pods in the selected namespaces         |
+| `namespaceSelector` + `podSelector` (same entry) | The selected Pods in the selected namespaces    |
+| `ipBlock`                                        | IP ranges (CIDR), usually outside the cluster   |
+
+An empty selector matches everything: `podSelector: {}` matches all the Pods of the policy's namespace, `namespaceSelector: {}` matches all the namespaces.
+
+These selectors can be used as separate entries of the `from` (or `to`) list, or combined in the same entry (only `podSelector` and `namespaceSelector`: `ipBlock` cannot be combined with other selectors).
 
 > [!IMPORTANT]
 >
 > Inside a single `from` (or `to`) entry, different selectors are combined with a logical AND.  
 > Multiple entries in the `from` (or `to`) list are combined with a logical OR.
+>
+> Each rule allows the traffic that matches both its `from` (or `to`) **and** its `ports`; multiple rules are combined with a logical OR.  
+> A rule without `from` (or `to`) matches all sources (or destinations), a rule without `ports` matches all ports.
 
-In the following example, we have two ingress elements / rules:
+In the following example, the `ingress` section contains a single rule, whose `from` list has two entries:
 
-- the first rule states that traffic from Pods labeled with `name: api-pod` in the `prod` namespace is allowed;
-- the second rule states that traffic from the IP range `192.168.5.10/32` is allowed;
+- the first entry allows traffic from Pods labeled with `name: api-pod` **and** running in the `prod` namespace;
+- the second entry allows traffic from the IP address `192.168.5.10` (a `/32` CIDR is a single address).
 
-Traffic from sources meeting either of these criteria is allowed to pass through.
+Traffic from sources meeting either of these criteria is allowed to pass through, but only to TCP port 3306, because `ports` applies to the whole rule.  
+The policy also isolates the `db` Pods for egress: they can only open connections to `192.168.5.10` on TCP port 80.
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -4177,7 +4220,54 @@ spec:
       port: 80
 ```
 
-In case you need to differentiate rules for ports or protocols, you can define multiple ingress or egress rules, each with its own `from` or `to` clause like in the following example.
+When in doubt, `kubectl describe` shows how Kubernetes has interpreted the policy: the `From:` blocks are combined with OR, while the selectors inside the same block are combined with AND.
+
+```console
+$ kubectl describe netpol db-policy
+Name:         db-policy
+Namespace:    default
+Created on:   2026-10-28 07:45:45 +0100 CET
+Labels:       <none>
+Annotations:  <none>
+Spec:
+  PodSelector:     role=db
+  Allowing ingress traffic:
+    To Port: 3306/TCP
+    From:
+      NamespaceSelector: kubernetes.io/metadata.name=prod
+      PodSelector: name=api-pod
+    From:
+      IPBlock:
+        CIDR: 192.168.5.10/32
+        Except:
+  Allowing egress traffic:
+    To Port: 80/TCP
+    To:
+      IPBlock:
+        CIDR: 192.168.5.10/32
+        Except:
+  Policy Types: Ingress, Egress
+```
+
+> [!CAUTION]
+>
+> A single dash changes the meaning of the policy.  
+> If `namespaceSelector` starts a new list item, the `from` list has three entries combined with OR: Pods labeled `name: api-pod` in the namespace of the policy, **or** any Pod of the `prod` namespace, **or** the IP `192.168.5.10`.
+>
+> ```yaml
+>   ingress:
+>   - from:
+>     - podSelector:
+>         matchLabels:
+>           name: api-pod
+>     - namespaceSelector:
+>         matchLabels:
+>           kubernetes.io/metadata.name: prod
+>     - ipBlock:
+>         cidr: 192.168.5.10/32
+> ```
+
+In case you need to differentiate rules for ports or protocols, you can define multiple ingress or egress rules, each with its own `from` or `to` clause and its own `ports`, like in the following example.
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -4206,7 +4296,42 @@ spec:
     ports:
     - protocol: TCP
       port: 3306
+  - ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
 ```
+
+The third rule has no `to`, so it matches any destination, but only on port 53: it allows DNS queries.  
+In `kubectl describe` the rules are separated by a dashed line:
+
+```console
+$ kubectl describe netpol internal-policy
+...
+Spec:
+  PodSelector:     name=internal
+  Not affecting ingress traffic
+  Allowing egress traffic:
+    To Port: 8080/TCP
+    To:
+      PodSelector: name=payroll
+    ----------
+    To Port: 3306/TCP
+    To:
+      PodSelector: name=mysql
+    ----------
+    To Port: 53/UDP
+    To Port: 53/TCP
+    To: <any> (traffic not restricted by destination)
+  Policy Types: Egress
+```
+
+> [!CAUTION]
+>
+> As soon as a Pod is isolated for egress, DNS traffic is blocked too, unless it is explicitly allowed.  
+> Without the third rule, the `internal` Pod could still reach `payroll` and `mysql` by IP address, but not by Service name (for example `mysql.default.svc.cluster.local`), because name resolution would fail.  
+> To be more restrictive, the DNS rule can allow only the cluster DNS Pods, using in the same `to` entry a `namespaceSelector` (`kubernetes.io/metadata.name: kube-system`) and a `podSelector` (`k8s-app: kube-dns`).
 
 This is an example of NetworkPolicy that selects every Pod in the namespace and denies all incoming and outgoing traffic.
 
@@ -4222,25 +4347,71 @@ spec:
   - Egress
 ```
 
+```console
+$ kubectl describe netpol default-deny-all
+Name:         default-deny-all
+Namespace:    default
+Created on:   2026-10-28 07:49:47 +0100 CET
+Labels:       <none>
+Annotations:  <none>
+Spec:
+  PodSelector:     <none> (Allowing the specific traffic to all pods in this namespace)
+  Allowing ingress traffic:
+    <none> (Selected pods are isolated for ingress connectivity)
+  Allowing egress traffic:
+    <none> (Selected pods are isolated for egress connectivity)
+  Policy Types: Ingress, Egress
+```
+
+Other common namespace-wide policies (all with `podSelector: {}`) are:
+
+- deny all ingress: only `Ingress` in `policyTypes` and no `ingress` rules;
+- deny all egress: only `Egress` in `policyTypes` and no `egress` rules;
+- allow all ingress (or egress): a single empty rule (`{}`), which has neither `from`/`to` nor `ports` and therefore matches all the traffic.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-all-ingress
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  ingress:
+  - {}
+```
+
+Since policies are additive, with an allow-all policy no other policy can restrict that direction for those Pods.
+
 > [!TIP]
 >
-> A NetworkPolicy never creates connectivity.
+> A NetworkPolicy never creates connectivity.  
 > It only restricts connectivity that already exists.  
 > Pods must already be able to communicate through the CNI plugin.
 >
-> NetworkPolicies apply only to Pods.  
-> They do **not** apply to:
+> NetworkPolicies select only Pods: Nodes, Services and Ingress resources cannot be selected, but:
 >
-> - Nodes
-> - Services
-> - Ingress resources
+> - traffic sent to the ClusterIP of a Service is translated (DNAT) to the IP of one of its Pods, so it is filtered by the policies of the destination Pods;
+> - traffic from an Ingress Controller to the backends is normal Pod-to-Pod traffic: if the backend Pods are isolated for ingress, the Ingress Controller Pods must be allowed (for example with a `namespaceSelector` on the controller's namespace);
+> - traffic between a Pod and the node it runs on (for example the kubelet probes) is always allowed, and a Pod cannot block traffic to itself;
+> - the behavior with `hostNetwork` Pods is not defined (it depends on the network plugin).
 
 Useful commands:
 
-- `kubectl get NetworkPolicies`: list all NetworkPolicies;
-- `kubectl get networkpolicy`: same as above;
-- `kubectl get networkpolicies`: same as above;
-- `kubectl describe netpol <NetworkPolicy name>`: returns details about a specific NetworkPolicy.
+- `kubectl get networkpolicy`: list all NetworkPolicies of the current namespace (also `networkpolicies`, `NetworkPolicies` or the short name `netpol`);
+- `kubectl describe netpol <NetworkPolicy name>`: returns details about a specific NetworkPolicy, showing how its rules have been interpreted;
+- `kubectl get pods --show-labels` and `kubectl get ns --show-labels`: show the labels to use in the selectors;
+- `kubectl explain networkpolicy.spec --recursive`: shows all the fields of the spec (there is no `kubectl create networkpolicy` command, so it's quicker to start from an example of the documentation);
+- `kubectl exec <pod> -- wget -qO- -T 2 http://<service>:<port>` (or `curl -m 2 ...`, depending on the tools available in the image): tests a connection from a Pod; a blocked connection times out.
+
+```console
+$ kubectl get netpol
+NAME               POD-SELECTOR    AGE
+db-policy          role=db         20s
+default-deny-all   <none>          20s
+internal-policy    name=internal   20s
+```
 
 ---
 
@@ -4248,12 +4419,12 @@ Useful commands:
 
 ### Why do we need Ingress instead of exposing Services directly?
 
-With a Service, if we want to expose an application to the external world, we can use a Service of type NodePort.  
-NodePort exposes the Service on a high TCP port (typically in the 30000–32767 range). Although functional, this is generally not suitable for production because users must access non-standard ports and additional infrastructure is usually required to provide a stable HTTP/HTTPS entry point.
-To remedy this, we could add a reverse proxy that accepts requests on port 80 and redirects them to the port exposed by the NodePort.  
+With a Service, if we want to expose an application to the external world, we can use a Service of type `NodePort`.  
+NodePort exposes the Service on a high port of every node (by default in the 30000–32767 range). Although functional, this is generally not suitable for production because users must access non-standard ports and additional infrastructure is usually required to provide a stable HTTP/HTTPS entry point.  
+To remedy this, we could add a reverse proxy that accepts requests on port 80 and forwards them to the port exposed by the NodePort.  
 The reverse proxy provides the public entry point, handles HTTP/HTTPS traffic and forwards requests to the NodePort Service.  
 We can then point our DNS to this server and finally users are able to access the application by simply visiting the FQDN.  
-All this is possible if the application is hosted on-premise.
+This is the typical setup when the application is hosted on-premises.
 
 ```text
              Internet
@@ -4284,9 +4455,9 @@ external infra   |
 +-------+   +-------+     +-------+
 ```
 
-If instead we are on a public cloud environment, we use a service of type `LoadBalancer` instead of `NodePort`.  
-The cloud provider automatically provisions an external load balancer that forwards traffic to the Service, typically through the NodePort automatically allocated for that Service.
-The load balancer has an external IP that can be provided to allow users to access the application.  
+If instead we are on a public cloud environment, we use a Service of type `LoadBalancer` instead of `NodePort`.  
+The cloud provider automatically provisions an external load balancer that forwards traffic to the Service, typically through the NodePort automatically allocated for that Service.  
+The load balancer has an external IP (shown in the `EXTERNAL-IP` column of `kubectl get svc`) that can be provided to allow users to access the application.  
 We then set the DNS to point to this IP and users are finally able to access the application with the FQDN.
 
 ```text
@@ -4319,8 +4490,8 @@ cloud provider   │
 
 If a new application in the same cluster needs to be exposed to the public on the same FQDN but a different URL, we then need:
 
-- in case of on-premise: create a new Service of type `NodePort` and another reverse proxy listening on a different port;
-- in case of cloud provider: create a new Service of type `LoadBalancer` which provisions another Load Balancer component set on a different port and with a different IP, which will result in increased costs.
+- on-premises: a new Service of type `NodePort` and another reverse proxy listening on a different port;
+- on a cloud provider: a new Service of type `LoadBalancer`, which provisions another load balancer with a different external IP and increases the costs.
 
 If both applications must be exposed under the same FQDN, something must inspect the incoming URL and decide where to send the request.  
 This requires an additional reverse proxy (or another load balancer) capable of URL-based routing.  
@@ -4331,7 +4502,7 @@ This means that routing configuration lives outside Kubernetes, making deploymen
 >
 > The routing may also be based on the requested host (for example shop.example.com and api.example.com) instead of the URL path.
 
-Finally, we also need to enable SSL for the applications, so the users can access the application using HTTPS.  
+Finally, we also need to enable TLS (often still called SSL) for the applications, so the users can access them using HTTPS.  
 We can do this at different levels:
 
 - application level;
@@ -4376,14 +4547,14 @@ Every new application requires:
 - another Service;
 - another externally exposed endpoint (LoadBalancer or reverse proxy);
 - additional firewall rules;
-- SSL configuration;
+- TLS (SSL) configuration;
 - DNS changes;
 - proxy configuration updates.
 
-All of this will become difficult to manage when we scale the application.  
-Kubernetes addresses these challenges by introducing the `Ingress` resource, which centralizes external access configuration.
+All of this becomes difficult to manage as the number of applications grows.  
+Kubernetes addresses these challenges by introducing the `Ingress` resource, which centralizes the configuration of the external HTTP/HTTPS access.
 
-The Ingress Controller becomes the **single entry point for the cluster**. Routing, SSL termination and virtual hosting are managed through Kubernetes Ingress resources instead of external infrastructure.
+The Ingress Controller becomes the **single entry point for the HTTP/HTTPS traffic of the cluster**. Routing, TLS termination and virtual hosting are managed through Kubernetes Ingress resources instead of external infrastructure.
 
 ```text
                  Internet
@@ -4415,43 +4586,61 @@ Kubernetes Cluster   |
 
 > [!NOTE]
 >
-> An Ingress is not directly exposed to the Internet but needs a Service.
+> The Ingress Controller runs as Pods inside the cluster, so it is not directly reachable from the Internet either: it must be exposed with a Service of type `NodePort` or `LoadBalancer`, as in the diagram above.  
+> The Ingress resource itself is just configuration.
+>
+> Also note that most Ingress Controllers use the Services referenced by the Ingress only to discover their Pods (EndpointSlices), and then send the traffic directly to the Pod IPs, without going through the ClusterIP.
 
-| Without Ingress                     | With Ingress                            |
-| ----------------------------------- | --------------------------------------- |
-| Multiple LoadBalancers              | Single LoadBalancer                     |
-| Multiple public IPs                 | Single public IP                        |
-| Proxy configured outside Kubernetes | Routing defined in Kubernetes manifests |
-| SSL configured separately           | Centralized SSL termination             |
-| DNS/proxy changes for every app     | Only update the Ingress manifest        |
-| URL routing configured externally   | URL routing managed by Kubernetes       |
+| Without Ingress                     | With Ingress                               |
+| ----------------------------------- | ------------------------------------------ |
+| Multiple LoadBalancers              | Single LoadBalancer                        |
+| Multiple public IPs                 | Single public IP                           |
+| Proxy configured outside Kubernetes | Routing defined in Kubernetes manifests    |
+| TLS configured separately           | Centralized TLS termination                |
+| DNS/proxy changes for every app     | Only Ingress changes (+ DNS for new hosts) |
+| URL routing configured externally   | URL routing managed by Kubernetes          |
 
 > [!NOTE]
 >
 > An Ingress resource is only a set of routing rules stored in Kubernetes and does not receive network traffic by itself.  
-> An Ingress Controller (such as NGINX Ingress Controller or Traefik) is the component responsible for implementing those rules.
+> An Ingress Controller (such as the NGINX Ingress Controller or Traefik) is the component responsible for implementing those rules.
 
 ---
 
 ### Ingress and Ingress Controller
 
-Think of Ingress as a Layer 7 load balancer built into the Kubernetes cluster that can be configured using native Kubernetes primitives.
+Think of Ingress as a Layer 7 (HTTP/HTTPS) load balancer that runs inside the Kubernetes cluster and can be configured using native Kubernetes primitives.  
+Only the Ingress API is built into Kubernetes, though: the component that implements it, the Ingress Controller, must be installed separately.  
+Ingress handles only HTTP and HTTPS: to expose other protocols or ports (for example a database on TCP port 5432) we still use Services of type `NodePort` or `LoadBalancer`.
 
-In order to implement Ingresses, you need two elements
+In order to implement Ingresses, you need two elements:
 
 - **Ingress Controller**: deploy a reverse proxy or a load balancing solution on the Kubernetes Cluster;
-- **Ingress resources**: define the configuration (routes, certificates, etc) in `Ingress` Kubernetes manifests.
+- **Ingress resources**: define the configuration (routes, certificates, etc.) in `Ingress` Kubernetes manifests.
 
 > [!NOTE]
 >
 > If you simply create Ingress resources (without deploying an Ingress controller) they won't work.  
-> A Kubernetes cluster does not come with an Ingress Controller by default.
+> A Kubernetes cluster does not come with an Ingress Controller by default (some distributions install one: k3s, for example, ships with Traefik).
 
 There are many available solutions for Ingress controller like NGINX, HAProxy, Traefik, GCE (Google Layer 7 Load Balancer), Contour.  
-Out of these, NGINX and GCE are currently being supported and maintained by the Kubernetes project.
+The Kubernetes project itself supports and maintains only the AWS (AWS Load Balancer Controller) and GCE ingress controllers; all the others are third-party projects.
+
+> [!WARNING]
+>
+> The community **Ingress NGINX** controller (`kubernetes/ingress-nginx`), used in the examples below and in most courses, has been **retired**:
+>
+> - best-effort maintenance ended in March 2026 (the last releases, published on March 20, 2026, are the controller versions v1.15.1, v1.14.5 and v1.13.9);
+> - there are no further releases, bugfixes or security fixes, and its repositories are read-only;
+> - existing installations keep working and the images and Helm charts remain available, but the Kubernetes project recommends migrating to the Gateway API or to another Ingress controller.
+>
+> Don't confuse it with the **NGINX Ingress Controller** by F5/NGINX (`nginx/kubernetes-ingress`), which is a different project.
+>
+> The `Ingress` API itself is GA and frozen: it will not get new features, but there are no plans to remove it.  
+> For new setups the Kubernetes project recommends the Gateway API, but the CKAD curriculum still includes "Use Ingress rules to expose applications".
 
 Keep in mind that the load balancer component is just a part of Ingress Controllers.  
-Ingress Controllers have additional intelligence to monitor the Kubernetes Cluster for definitions of ingress resources and configure the underlying proxy accordingly.
+Ingress Controllers have additional intelligence to watch the Kubernetes API for Ingress resources (and for the Services, EndpointSlices and Secrets they reference) and reconfigure the underlying proxy accordingly.
 
 ---
 
@@ -4460,9 +4649,10 @@ Ingress Controllers have additional intelligence to monitor the Kubernetes Clust
 > [!NOTE]
 >
 > Modern Kubernetes clusters usually install Ingress Controllers using Helm charts or vendor-provided manifests.  
-> The following Deployment is intentionally simplified to illustrate the components involved.
+> The following Deployment is intentionally simplified to illustrate the components involved.  
+> For comparison, the official static manifest of ingress-nginx contains 19 objects (Namespace, ServiceAccounts, Roles, ClusterRoles and bindings, ConfigMap, Services, Deployment, IngressClass and a validating admission webhook with its Jobs).
 
-In the following example we'll use NGINX as an Ingress Controller.  
+In the following example we'll use the community NGINX Ingress Controller (retired, but still a good example of the components involved).  
 The NGINX controller is deployed just like any other Deployment in Kubernetes.
 
 ```yaml
@@ -4480,9 +4670,10 @@ spec:
       labels:
         name: nginx-ingress
     spec:
+      serviceAccountName: nginx-ingress-serviceaccount
       containers:
       - name: nginx-ingress-controller
-        image: registry.k8s.io/ingress-nginx/controller:v1.13.1
+        image: registry.k8s.io/ingress-nginx/controller:v1.15.1
         args:
         - /nginx-ingress-controller
         - --configmap=$(POD_NAMESPACE)/nginx-configuration
@@ -4502,12 +4693,14 @@ spec:
           containerPort: 443
 ```
 
-We also passed two environment variables, carrying the Pod name and namespace.  
-The NGINX controller needs them to locate and read the ConfigMap associated with the Pod.
+We also pass two environment variables carrying the Pod's own name and namespace, read through the Downward API (`fieldRef`).  
+The controller refuses to start without them, because it uses them to find its own Pod: for example, it creates its leader-election lock in its own namespace, and it uses its labels to find the other controller Pods and publish their address in the `status` of the Ingresses.  
+In `args`, `$(POD_NAMESPACE)` is replaced by Kubernetes with the value of the environment variable, so `--configmap` points to the `nginx-configuration` ConfigMap in the controller's own namespace.
 
-Finally, we specify the ports used by the Ingress Controller, which are `80` and `443`.
+Finally, we specify the ports used by the Ingress Controller, which are `80` and `443`.  
+With `serviceAccountName` we also assign the ServiceAccount that gives the controller its permissions (see below).
 
-We also add an empty ConfigMap, which can later be used to pass configuration values (like `err-log-path`, `keep-alive` and `ssl-protocols`)
+We also add an empty ConfigMap, which can later be used to pass global configuration values (like `error-log-path`, `keep-alive` and `ssl-protocols`).
 
 ```yaml
 apiVersion: v1
@@ -4516,7 +4709,7 @@ metadata:
   name: nginx-configuration
 ```
 
-In order to expose the Ingress Controller externally, we add a `Service` of type `NodePort` with the selector pointing to the label of the pod.
+In order to expose the Ingress Controller externally, we add a `Service` of type `NodePort` (`LoadBalancer` on a cloud provider) with the selector pointing to the label of the controller Pods.
 
 ```yaml
 apiVersion: v1
@@ -4539,7 +4732,7 @@ spec:
 ```
 
 As said before, the Ingress Controller can monitor the cluster and configure the underlying NGINX server when something changes.  
-But in order for the Ingress Controller to do this, we need a `ServiceAccount` with the right set of permissions defined with `Roles`, `ClusterRoles` and `RoleBindings`.
+But in order for the Ingress Controller to do this, we need a `ServiceAccount` with the right set of permissions, granted with `ClusterRoles`/`Roles` and `ClusterRoleBindings`/`RoleBindings`: for example reading Ingresses, IngressClasses, Services, EndpointSlices, Secrets (the TLS certificates) and ConfigMaps, updating the `ingresses/status` subresource, creating Events and using a Lease for leader election.
 
 ```yaml
 apiVersion: v1
@@ -4548,18 +4741,23 @@ metadata:
   name: nginx-ingress-serviceaccount
 ```
 
+All these objects must be created in the controller's namespace, starting from the ServiceAccount: if it doesn't exist yet, the ReplicaSet cannot create the Pods (`error looking up service account ...`) and keeps retrying until it is created.
+
 ```bash
-kubectl create -f nginx-ingress-controller.yaml
+kubectl create -f nginx-ingress-serviceaccount.yaml    # plus the Roles/ClusterRoles and their bindings
 kubectl create -f nginx-configuration.yaml
+kubectl create -f nginx-ingress-controller.yaml
 kubectl create -f nginx-ingress.yaml
-kubectl create -f nginx-ingress-serviceaccount.yaml
 ```
+
+The Ingresses of the next section also reference the IngressClass `nginx` (see the IngressClass section), which must exist as well.
 
 ---
 
 ### Ingress resources
 
-Let's now define some Ingress rules on the Ingress Controller via `Ingress` resources.
+Let's now define some Ingress rules on the Ingress Controller via `Ingress` resources.  
+An Ingress must be created in the same namespace as the Services it references (a backend refers to a Service only by name), while the controller usually runs in its own namespace and watches the Ingresses of all namespaces.
 
 You can create Ingress rules to, for example:
 
@@ -4568,7 +4766,7 @@ You can create Ingress rules to, for example:
 - route traffic to different applications based on the domain name (FQDN).
 
 In the first case, the section `defaultBackend` defines where the traffic is routed to.  
-Considering that it's a single backend, we don't need any specific rule; simply specifying service name and port is enough.
+Considering that it's a single backend, we don't need any specific rule; simply specifying service name and port is enough (an Ingress must contain at least `rules` or `defaultBackend`).
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -4586,9 +4784,11 @@ spec:
 
 ```bash
 kubectl create -f ingress-wear.yaml
+# or, imperatively
+kubectl create ingress ingress-wear --class=nginx --default-backend=wear-service:80
 ```
 
-Now we can retrieve the created Ingress
+Now we can retrieve the created Ingress:
 
 ```console
 $ kubectl get ingress
@@ -4596,7 +4796,9 @@ NAME           CLASS   HOSTS   ADDRESS   PORTS   AGE
 ingress-wear   nginx   *                 80      32s
 ```
 
-If instead, we want to create different rules based on different URLs, we can do the following
+The `ADDRESS` column is empty until an Ingress Controller handles the Ingress and publishes its address in the `status` of the Ingress.
+
+If instead we want to route traffic to different Services based on the URL path, we can use a single rule with multiple paths:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -4624,16 +4826,25 @@ spec:
               number: 80
 ```
 
-The available path types are the following
+The available path types are the following:
 
-| pathType               | Meaning              |
-| ---------------------- | -------------------- |
-| Exact                  | Exact URL            |
-| Prefix                 | Prefix matching      |
-| ImplementationSpecific | Controller-dependent |
+| pathType               | Meaning                                                                                                                          |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Exact                  | Matches the exact URL path (case-sensitive): `/wear` does not match `/wear/`                                                     |
+| Prefix                 | Matches element by element, splitting the path by `/`: `/wear` matches `/wear`, `/wear/` and `/wear/shirts`, but not `/wearable` |
+| ImplementationSpecific | Matching depends on the IngressClass (controller-dependent)                                                                      |
+
+> [!IMPORTANT]
+>
+> `pathType` is required: without it the Ingress is rejected (`pathType: Required value: pathType must be specified`); with `Exact` and `Prefix` the path must start with `/`.  
+> If several paths match a request, the longest one wins; with paths of the same length, `Exact` wins over `Prefix`.
+>
+> The path is forwarded to the backend unchanged: a request for `/wear/shirts` reaches `wear-service` as `/wear/shirts`, so the application must serve the `/wear` prefix (or the path must be rewritten, see the Additional options section).
 
 ```bash
 kubectl create -f ingress-wear-watch.yaml
+# or, imperatively
+kubectl create ingress ingress-wear-watch --class=nginx --rule="/wear*=wear-service:80" --rule="/watch*=watch-service:80"
 ```
 
 We now see two backend URLs under the `Rules` section.
@@ -4656,12 +4867,25 @@ Annotations:  <none>
 Events:       <none>
 ```
 
+Since the Services don't exist yet, the backends show `<error: services "..." not found>`; once they exist, `describe` shows the endpoints (Pod IP and port) of each backend:
+
+```console
+Rules:
+  Host        Path  Backends
+  ----        ----  --------
+  *
+              /wear    wear-service:80 (10.244.0.209:80)
+              /watch   watch-service:80 (10.244.0.210:80)
+```
+
 You can also notice that the `Default backend` field shows `<default>`, indicating that none has been explicitly configured.  
 We can specify the `defaultBackend`, which defines the backend that receives traffic that does not match any of the rules.  
-If omitted, unmatched requests typically receive a 404 response generated by the Ingress Controller.
+If omitted, the handling of unmatched requests is up to the Ingress Controller: typically they receive a 404 response generated by the controller itself.  
+Controllers differ here: for example ingress-nginx also uses the `defaultBackend` of an Ingress for the unmatched paths of the hosts defined in it, while Traefik applies `spec.defaultBackend` only to Ingresses without rules.
 
 The third configuration option uses domain names or host names.  
-In this case we create 2 rules (one for each domain) and we add the field `host` to each rule.
+In this case we create 2 rules (one for each domain) and we add the field `host` to each rule.  
+Since each host serves a whole application, the path is `/`, which with `pathType: Prefix` matches every path.
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -4674,7 +4898,7 @@ spec:
   - host: wear.my-online-store.com
     http:
       paths:
-      - path: /wear
+      - path: /
         pathType: Prefix
         backend:
           service:
@@ -4684,7 +4908,7 @@ spec:
   - host: watch.my-online-store.com
     http:
       paths:
-      - path: /watch
+      - path: /
         pathType: Prefix
         backend:
           service:
@@ -4693,12 +4917,26 @@ spec:
               number: 80
 ```
 
+```bash
+kubectl create ingress ingress-wear-watch --class=nginx \
+  --rule="wear.my-online-store.com/*=wear-service:80" \
+  --rule="watch.my-online-store.com/*=watch-service:80"
+```
+
+If the path were `/wear`, only the requests for `/wear` and `/wear/...` of `wear.my-online-store.com` would be routed, while `http://wear.my-online-store.com/` would receive a 404.
+
 > [!CAUTION]
 >
-> URL-based routing usually uses a single rule containing multiple paths.
-> Host-based routing instead uses one rule for each host.
+> URL-based routing usually uses a single rule containing multiple paths.  
+> Host-based routing instead uses one rule for each host.  
+> A rule without `host` applies to all hosts (`*` in `kubectl get` and `kubectl describe`).
 
-You can also add TLS to an Ingress
+> [!TIP]
+>
+> A host can also be a wildcard: `*.my-online-store.com` matches `wear.my-online-store.com`, but neither `my-online-store.com` nor `a.wear.my-online-store.com` (the wildcard covers a single DNS label).  
+> An IP address is not allowed as host (`must be a DNS name, not an IP address`).
+
+You can also add TLS to an Ingress:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -4706,6 +4944,7 @@ kind: Ingress
 metadata:
   name: tls-example-ingress
 spec:
+  ingressClassName: nginx
   tls:
   - hosts:
       - https-example.foo.com
@@ -4723,7 +4962,13 @@ spec:
               number: 80
 ```
 
-and the certificate is retrieved from a Secret that must contain the fields `tls.crt` and `tls.key`
+Keep in mind that:
+
+- the `hosts` in the `tls` section must match the `host` of the rules (TLS does not work on a rule without host);
+- TLS is terminated by the Ingress Controller, on port 443 only: the traffic from the controller to the Pods is plain HTTP;
+- the Secret must be in the same namespace as the Ingress.
+
+The certificate is retrieved from a Secret of type `kubernetes.io/tls` that must contain the keys `tls.crt` and `tls.key`:
 
 ```yaml
 apiVersion: v1
@@ -4735,6 +4980,18 @@ data:
   tls.crt: base64 encoded cert
   tls.key: base64 encoded key
 type: kubernetes.io/tls
+```
+
+Instead of writing it by hand, it's quicker to create it from the certificate and key files (`kubectl` also checks that the key matches the certificate):
+
+```bash
+kubectl create secret tls testsecret-tls --cert=tls.crt --key=tls.key
+```
+
+```console
+$ kubectl get ingress tls-example-ingress
+NAME                  CLASS   HOSTS                   ADDRESS   PORTS     AGE
+tls-example-ingress   nginx   https-example.foo.com             80, 443   20s
 ```
 
 ---
@@ -4752,14 +5009,14 @@ For example:
 Each controller watches only the Ingress resources that belong to its own class.
 
 An `IngressClass` is a cluster-scoped resource that identifies which Ingress Controller should implement a given Ingress resource.  
-An `Ingress` references it through the field
+An `Ingress` references it through the field:
 
 ```yaml
 spec:
   ingressClassName: nginx
 ```
 
-for example
+for example:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -4770,7 +5027,15 @@ spec:
   controller: k8s.io/ingress-nginx
 ```
 
-The corresponding Ingress then becomes
+The `controller` field identifies the controller implementation: `k8s.io/ingress-nginx` is the default value used by the community ingress-nginx controller.
+
+```console
+$ kubectl get ingressclass
+NAME    CONTROLLER             PARAMETERS   AGE
+nginx   k8s.io/ingress-nginx   <none>       20s
+```
+
+The corresponding Ingress then becomes:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -4799,12 +5064,33 @@ spec:
 +---------------------------+
 ```
 
-If an `Ingress` does not specify an `ingressClassName`, the cluster may:
+If an `Ingress` does not specify an `ingressClassName`:
 
-- assign the default IngressClass;
-- ignore the Ingress if no default exists.
+- if an IngressClass is marked as the default class, the `DefaultIngressClass` admission controller writes its name in the `spec.ingressClassName` of the new Ingress (the existing Ingresses are not updated);
+- otherwise the Ingress remains without a class, and whether a controller handles it depends on how the controller is configured (ingress-nginx, for example, ignores it unless it is started with `--watch-ingress-without-class`).
 
-This depends on how the Ingress Controllers are configured.
+An IngressClass is marked as default with the annotation `ingressclass.kubernetes.io/is-default-class: "true"`:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: nginx
+  annotations:
+    ingressclass.kubernetes.io/is-default-class: "true"
+spec:
+  controller: k8s.io/ingress-nginx
+```
+
+```bash
+# or, on an existing IngressClass
+kubectl annotate ingressclass nginx ingressclass.kubernetes.io/is-default-class=true
+```
+
+> [!CAUTION]
+>
+> Mark only one IngressClass as default.  
+> According to the documentation, with more than one default class the new Ingresses without `ingressClassName` are rejected; current versions (verified on v1.34) instead assign the most recently created default class.
 
 > [!NOTE]
 >
@@ -4814,7 +5100,12 @@ This depends on how the Ingress Controllers are configured.
 > kubernetes.io/ingress.class: nginx
 > ```
 >
-> This annotation is now deprecated in favour of the ingressClassName field.
+> This annotation is now deprecated in favour of the `ingressClassName` field.  
+> The API server still accepts it, but returns a warning:
+>
+> ```console
+> Warning: annotation "kubernetes.io/ingress.class" is deprecated, please use 'spec.ingressClassName' instead
+> ```
 
 ---
 
@@ -4822,9 +5113,9 @@ This depends on how the Ingress Controllers are configured.
 
 Different Ingress Controllers have different options that can be used to customize how they work.
 
-For example, [NGINX Ingress Controller has many options](https://kubernetes.github.io/ingress-nginx/examples/) that can be passed as environment variables or annotations.
+For example, the [NGINX Ingress Controller has many options](https://kubernetes.github.io/ingress-nginx/examples/), which can be set as command-line arguments of the controller, as global settings in its ConfigMap or for a single Ingress through annotations.
 
-One useful argument to pass to the NGINX Ingress Controller allows the controller to route unmatched requests to a default `Service`, even if no default backend is defined in the `Ingress` resource.
+One useful argument to pass to the NGINX Ingress Controller allows the controller to route unmatched requests to a default `Service` (instead of its built-in 404 response), even if no default backend is defined in the `Ingress` resources.
 
 ```yaml
         args:
@@ -4833,18 +5124,56 @@ One useful argument to pass to the NGINX Ingress Controller allows the controlle
 
 Some common examples of annotations for the NGINX Ingress Controller are:
 
-| Annotation                                    | Purpose                                                               |
-| --------------------------------------------- | --------------------------------------------------------------------- |
-| `nginx.ingress.kubernetes.io/rewrite-target`  | Rewrites the request path before forwarding it to the backend Service |
-| `nginx.ingress.kubernetes.io/ssl-redirect`    | Redirects HTTP requests to HTTPS                                      |
-| `nginx.ingress.kubernetes.io/proxy-body-size` | Sets the maximum accepted request body size                           |
+| Annotation                                    | Purpose                                                                                               |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `nginx.ingress.kubernetes.io/rewrite-target`  | Rewrites the request path before forwarding it to the backend Service                                 |
+| `nginx.ingress.kubernetes.io/use-regex`       | Treats the paths of the Ingress as regular expressions                                                |
+| `nginx.ingress.kubernetes.io/ssl-redirect`    | Redirects HTTP requests to HTTPS (enabled by default when the Ingress has TLS; `"false"` disables it) |
+| `nginx.ingress.kubernetes.io/proxy-body-size` | Sets the maximum accepted request body size                                                           |
 
 These annotations are specific to the NGINX Ingress Controller. Other Ingress Controllers may use different annotations or configuration mechanisms.
 
+`rewrite-target` is often needed because, as seen before, the path is forwarded to the backend unchanged: an application that expects requests on `/` would receive `/wear` and probably answer with a 404.  
+With the regular expression capture groups (example from the ingress-nginx documentation), the part of the path after `/wear` is passed to the backend as `$2`:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-wear-rewrite
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /wear(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: wear-service
+            port:
+              number: 80
+```
+
+| Request path   | Path received by `wear-service` |
+| -------------- | ------------------------------- |
+| `/wear`        | `/`                             |
+| `/wear/`       | `/`                             |
+| `/wear/shirts` | `/shirts`                       |
+
+The simpler `nginx.ingress.kubernetes.io/rewrite-target: /` (found in many older examples) replaces the whole path with `/`: `/wear/shirts` would also reach the backend as `/`.
+
 Useful commands:
 
-- `kubectl create ingress <ingress-name> --rule="host/path=service:port"`: template for creating an Ingress imperatively;
-- `kubectl create ingress ingress-test --rule="wear.my-online-store.com/wear*=wear-service:80"`: creates an Ingress that routes requests for `wear.my-online-store.com` whose path starts with `/wear` to the `wear-service` Service on port 80.
+- `kubectl create ingress <ingress-name> --class=<class> --rule="host/path=service:port"`: template for creating an Ingress imperatively. A path ending with `*` gets `pathType: Prefix`, otherwise `pathType: Exact`; the host can be omitted (`--rule="/path*=service:port"`); `,tls=<secret>` at the end of a rule enables TLS for its host (`,tls` alone uses the controller's default certificate); `--default-backend=service:port` and `--annotation key=value` set the default backend and the annotations;
+- `kubectl create ingress ingress-test --class=nginx --rule="wear.my-online-store.com/wear*=wear-service:80"`: creates an Ingress that routes requests for `wear.my-online-store.com` whose path is `/wear` or starts with `/wear/` to the `wear-service` Service on port 80;
+- `kubectl get ingress` (short name `ing`) and `kubectl describe ingress <ingress-name>`: list the Ingresses and show the details of one of them;
+- `kubectl get ingressclass`: lists the IngressClasses of the cluster;
+- `kubectl create secret tls <secret-name> --cert=<cert file> --key=<key file>`: creates the TLS Secret for an Ingress;
+- `curl -H "Host: wear.my-online-store.com" http://<node IP>:<node port>/`: tests a host-based rule without DNS, sending the request to the NodePort of the Ingress Controller with the right `Host` header.
 
 ---
 
