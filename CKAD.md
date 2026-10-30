@@ -4054,9 +4054,7 @@ If we want to avoid that (maybe the security team or an audit requires preventin
 A `NetworkPolicy` (API group `networking.k8s.io/v1`) is a namespaced Kubernetes resource that defines which network connections are allowed to and/or from a selected set of Pods.  
 In order to apply a `NetworkPolicy` to a Pod we use labels and selectors: we label the Pod and we use the same label in the `spec.podSelector` field of the `NetworkPolicy`.  
 `spec.podSelector` selects Pods only in the namespace of the NetworkPolicy; an empty selector (`podSelector: {}`) selects all the Pods of that namespace.  
-When building the policy, under `spec.policyTypes` we can specify whether the NetworkPolicy controls Ingress traffic, Egress traffic, or both.  
-Finally, we define the allowed sources (`ingress[].from`) or destinations (`egress[].to`) and, optionally, restrict them to specific ports and protocols (`ports`).  
-Once a Pod is selected by a NetworkPolicy that has `Ingress` in its `policyTypes`, all ingress traffic to it is denied unless explicitly allowed by the ingress rules of at least one NetworkPolicy that selects it (the same applies to egress).
+When building the policy, under `spec.policyTypes` we can specify whether the NetworkPolicy controls Ingress traffic, Egress traffic, or both.
 
 > [!CAUTION]
 >
@@ -4070,9 +4068,18 @@ Once a Pod is selected by a NetworkPolicy that has `Ingress` in its `policyTypes
 >
 > To avoid surprises, always write `policyTypes` explicitly.
 
+Finally, we define the allowed sources (`ingress[].from`) or destinations (`egress[].to`) and, optionally, restrict them to specific ports and protocols (`ports`).
+
+> [!TIP]
+>
+> The `ports` of a rule are the ports **of the Pod** (numbers or names of container ports), not the ports of a Service: if a Service exposes port 80 with `targetPort: 8080`, the policy must allow port 8080.  
+> If `protocol` is omitted, it defaults to `TCP`.
+
+Once a Pod is selected by a NetworkPolicy that has `Ingress` in its `policyTypes`, all ingress traffic to it is denied unless explicitly allowed by the ingress rules of at least one NetworkPolicy that selects it (the same applies to egress).
+
 > [!IMPORTANT]
 >
-> NetworkPolicies are additive.  
+> NetworkPolicies are **additive**.  
 > If multiple NetworkPolicies select the same Pod, the allowed traffic is the union of all their rules.
 >
 > Kubernetes does not evaluate NetworkPolicies in order, and there are no "deny" rules: a policy can only add allowed traffic, it can never block traffic allowed by another policy.
@@ -4104,14 +4111,9 @@ Note that a `podSelector` inside `from` (without a `namespaceSelector`) selects 
 
 > [!IMPORTANT]
 >
-> A NetworkPolicy is allow-based.  
+> A NetworkPolicy is **allow-based**.  
 > You specify what traffic is allowed. Everything else is denied for the selected Pods, in the directions listed in `policyTypes`.  
 > In the example above (`policyTypes` contains only `Ingress`) the egress traffic of the database Pod is not affected.
-
-> [!TIP]
->
-> The `ports` of a rule are the ports **of the Pod** (numbers or names of container ports), not the ports of a Service: if a Service exposes port 80 with `targetPort: 8080`, the policy must allow port 8080.  
-> If `protocol` is omitted, it defaults to `TCP`.
 
 NetworkPolicies are enforced only if the cluster uses a **Container Network Interface** (CNI) plugin that supports them.  
 Not all network solutions support NetworkPolicies. Some of those that support them are:
@@ -4404,14 +4406,6 @@ Useful commands:
 - `kubectl get pods --show-labels` and `kubectl get ns --show-labels`: show the labels to use in the selectors;
 - `kubectl explain networkpolicy.spec --recursive`: shows all the fields of the spec (there is no `kubectl create networkpolicy` command, so it's quicker to start from an example of the documentation);
 - `kubectl exec <pod> -- wget -qO- -T 2 http://<service>:<port>` (or `curl -m 2 ...`, depending on the tools available in the image): tests a connection from a Pod; a blocked connection times out.
-
-```console
-$ kubectl get netpol
-NAME               POD-SELECTOR    AGE
-db-policy          role=db         20s
-default-deny-all   <none>          20s
-internal-policy    name=internal   20s
-```
 
 ---
 
