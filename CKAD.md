@@ -6260,7 +6260,8 @@ The resources are exposed through `/api` and `/apis` API paths.
 | Namespaced resources, named groups | `/apis/<group>/<version>/namespaces/<namespace>/<resource>` |
 | Other endpoints                    | `/<endpoint>`                                               |
 
-For example, `/api/v1/pods` lists the Pods of all the namespaces, `/api/v1/namespaces/default/pods/nginx` is the Pod `nginx` of the `default` namespace and `/apis/apps/v1/namespaces/default/deployments` lists the Deployments of the `default` namespace.
+For example, `/api/v1/pods` lists the Pods of all the namespaces, `/api/v1/namespaces/default/pods/nginx` is the Pod `nginx` of the `default` namespace and `/apis/apps/v1/namespaces/default/deployments` lists the Deployments of the `default` namespace.  
+In order to perform operations (like Ccreate, Patch, Replace, Delete) on a namespaced resource, the namespaced URI should always be provided.
 
 > [!NOTE]
 >
