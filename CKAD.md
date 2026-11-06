@@ -5931,7 +5931,7 @@ It is vital to **secure the underlying hosts**, that is, the physical or virtual
 The first line of defense is controlling access to the kube-apiserver itself.  
 We need to make two types of decisions:
 
-- who can access the cluster: defined through the **authentication mechanism** like certificates, tokens, ServiceAccounts (for machines), external authentication providers (like LDAP);
+- who can access the cluster: defined through the **authentication mechanism** like certificates, tokens, ServiceAccounts (for machines), external identity providers (through OIDC, webhook token authentication or an authenticating proxy, for example in front of LDAP);
 - what can they do: defined through the **authorization mechanism** like RBAC, ABAC (where A stands for attributes), Node Authorization, Webhook Mode.
 
 Then, all communication between the kube-apiserver and the other components of the cluster is secured by TLS encryption.
@@ -5948,34 +5948,58 @@ Kubernetes does not manage user accounts natively.
 So we cannot create or view the list of users with `kubectl`.  
 Instead, it relies on external sources like:
 
-- static password and token files (with tokens and user details);
-- certificates;
-- third-party authentication protocols (identity providers like LDAP, Kerberos, etc.);
+- a static token file (with tokens and user details);
+- X.509 client certificates signed by the cluster CA: the Common Name (`CN`) of the certificate is the username and the Organization fields (`O`) are the groups;
+- third-party identity providers (like LDAP, Kerberos, etc.), integrated through OpenID Connect (OIDC) tokens, webhook token authentication or an authenticating proxy.
+
+The static password file (basic authentication, `--basic-auth-file`), found in older courses, was removed in Kubernetes v1.19.
 
 This is different for ServiceAccounts: in this case you can manage them via the API.
 
 Focusing on users, all user access is managed by the `kube-apiserver`, whether accessing the cluster through:
 
-- the `kubectl`;
+- the `kubectl` command-line tool;
 - the API directly (like `curl https://kube-server-ip:6443/`).
 
-In the approach with static password and token files, we have CSV files like the following one `user-token-details.csv`:
+In the approach with the static token file, passed to the kube-apiserver with the `--token-auth-file=user-token-details.csv` option, we have a CSV file like the following one `user-token-details.csv`, with the columns token, username, user UID and (optionally) groups:
 
 ```csv
-token,user,uid,groups
 "v7f89as7df89as7df89as7","mario.rossi","1001","developers,engineering"
 "9a8b7c6d5e4f3g2h1i0jkl","giulia.bianchi","1002","administrators,security"
 "z1x2c3v4b5n6m7q8w9e0rt","luca.verdi","1003","viewers,analytics"
 "p0o9i8u7y6t5r4e3w2q1as","app-service-account","2001","system-agents"
 ```
 
-with this, you can pass the token as a Bearer token in the request's Authorization header:
+> [!CAUTION]
+>
+> The file must not have a header line: every line is read as a token.  
+> With a header like `token,user,uid,groups`, the string `token` becomes a valid Bearer token that authenticates as the user `user`, member of the group `groups`.  
+> When there is more than one group, the groups column must be double quoted.
+
+With this file, you can pass the token as a Bearer token in the request's Authorization header:
 
 ```bash
 curl -v -k https://master-node-ip:6443/api/v1/pods --header "Authorization: Bearer v7f89as7df89as7df89as7"
 ```
 
-This method is not a recommended authentication mechanism because it stores tokens or passwords in clear text.
+> [!TIP]
+>
+> An invalid token returns `401 Unauthorized` (authentication failed).  
+> A valid token of a user without permissions returns `403 Forbidden` (authentication succeeded, authorization failed), with a message like `pods is forbidden: User "mario.rossi" cannot list resource "pods" in API group "" at the cluster scope`.
+
+This method is not a recommended authentication mechanism because it stores tokens in clear text, the tokens never expire and the list of tokens cannot be changed without restarting the API server.
+
+`kubectl auth whoami` shows how the API server sees the current credentials:
+
+```console
+$ kubectl auth whoami
+ATTRIBUTE                                           VALUE
+Username                                            kubernetes-admin
+Groups                                              [system:masters system:authenticated]
+Extra: authentication.kubernetes.io/credential-id   [X509SHA256=0b7f32664025063ffb0b0322b9202c81e620147b88c62c904744d81c0dc5aede]
+```
+
+With the token of `mario.rossi` from the file above, it shows `Username mario.rossi`, `UID 1001` and `Groups [developers engineering system:authenticated]`: the `system:authenticated` group is added to every authenticated user.
 
 ---
 
@@ -5999,7 +6023,7 @@ kubectl get pods \
   --certificate-authority ca.crt
 ```
 
-In order to avoid typing all those each time, we can move this information to a configuration file called `kubeconfig` and specify only this one with the `kubeconfig` option in the command.
+In order to avoid typing all those each time, we can move this information to a configuration file called `kubeconfig` and specify only this one with the `--kubeconfig` option in the command.
 
 ```bash
 kubectl get pods \
@@ -6008,7 +6032,7 @@ kubectl get pods \
 
 By default, the `kubectl` tool looks for the file `~/.kube/config`.  
 So, if the file is placed there, we don't have to specify the path to that file each time.  
-This default can be overridden by setting the `KUBECONFIG` environment variable, which specifies the kubeconfig file(s) to use.
+This default can be overridden by setting the `KUBECONFIG` environment variable, which specifies the kubeconfig file(s) to use (with more files, separated by `:` on Linux, `kubectl` merges them).
 
 ```bash
 kubectl get pods
@@ -6039,7 +6063,7 @@ Context
   └── Cluster + User + Namespace
 ```
 
-Here is an example of real kubeconfig file
+Here is an example of a real kubeconfig file (the base64 values are shortened):
 
 ```yaml
 apiVersion: v1
@@ -6061,7 +6085,7 @@ clusters:
 - name: google
   cluster:
     server: https://google.example.com:6443
-    certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURYVENDQWtHZ0F3SUJBZ0lKQUwxYzJ2O
+    certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURCVENDQWUyZ0F3SUJBZ0lJ
 
 users:
 - name: admin
@@ -6072,6 +6096,9 @@ users:
   user:
     token: <token>
 - name: dev-user
+  user:
+    token: <token>
+- name: prod-user
   user:
     token: <token>
 
@@ -6097,8 +6124,11 @@ current-context: admin@production
 >
 > The CA of the destination server can be specified:
 >
-> - as a path to a certificate file, with the `certificate-authority` field;  
+> - as a path to a certificate file, with the `certificate-authority` field;
 > - directly in the kubeconfig as a base64-encoded value, with the `certificate-authority-data` field.
+>
+> The same applies to the client certificate and key of a user (`client-certificate`/`client-certificate-data` and `client-key`/`client-key-data`).  
+> The `-data` fields must contain valid base64: otherwise every `kubectl` command fails with `error loading config file ... illegal base64 data`.
 
 ![kubeconfig: clusters, context and users](./images/01-kubeconfig-clusters-context-users.png "kubeconfig contents")
 
@@ -6151,22 +6181,31 @@ Google ◄────────────────── Dev@Google ─�
                                                              Prod User
 ```
 
+Note that a cluster or a user can also be defined without being used by any context (like `development` and `prod-user`).
+
 As you can notice, there is also a `current-context` field inside the kubeconfig.  
 It tells `kubectl` which context to use by default when no other context is explicitly specified.
 
-The `current-context` field is optional.
+The `current-context` field is optional, but without it `kubectl` doesn't know which cluster to contact: `kubectl config current-context` returns `error: current-context is not set` and the other commands fall back to `localhost:8080`, unless a context is passed with `--context <context-name>`.
 
 Useful commands:
 
-- `kubectl config view`: view the configuration of the currently used kubeconfig file;
+- `kubectl config view`: view the configuration of the currently used kubeconfig file(s), merged, with the certificate data and the tokens hidden (`DATA+OMITTED`, `REDACTED`); `--raw` shows them and `--minify` shows only the current context;
 - `kubectl config view --kubeconfig=mycustom-config`: view the configuration of a specific kubeconfig file;
 - `kubectl config get-clusters`: list the clusters available;
 - `kubectl config get-users`: list the users available;
 - `kubectl config get-contexts`: list the contexts available;
 - `kubectl config current-context`: view the current context being used;
-- `kubectl config use-context <context-name>`: change the current context of the current kubeconfig file.
+- `kubectl config use-context <context-name>`: change the current context of the current kubeconfig file (it updates the `current-context` field of the file);
+- `kubectl config set-context --current --namespace=<namespace>`: change the default namespace of the current context.
 
 ```console
+$ kubectl config get-contexts
+CURRENT   NAME                               CLUSTER              AUTHINFO        NAMESPACE
+*         admin@production                   production           admin
+          dev@google                         google               dev-user        invoicing
+          my-kube-admin@my-kube-playground   my-kube-playground   my-kube-admin
+
 $ kubectl config current-context
 admin@production
 
@@ -6197,26 +6236,31 @@ API groups are accessible via API paths in the following way:
   - `/networking.k8s.io/v1`: `NetworkPolicies`, `Ingress`;
   - `/storage.k8s.io/v1`: `StorageClasses`;
   - `/authentication.k8s.io/v1`: authentication-related APIs;
-  - `/rbac.authorization.k8s.io`: `Roles`, `RoleBindings`, `ClusterRoles`, `ClusterRoleBindings`;
+  - `/authorization.k8s.io/v1`: authorization checks like `SubjectAccessReviews` (used by `kubectl auth can-i`);
+  - `/rbac.authorization.k8s.io/v1`: `Roles`, `RoleBindings`, `ClusterRoles`, `ClusterRoleBindings`;
   - `/certificates.k8s.io/v1`: `CertificateSigningRequests`;
 - Other API server endpoints (that are neither API groups nor part of one), representing `nonResourceURLs` like:
   - `/version`: to view the version of the cluster;
-  - `/healthz`: to monitor the health of the cluster;
+  - `/livez` and `/readyz`: to monitor the health of the API server (`/healthz` is deprecated since v1.16);
   - `/metrics`: to retrieve metrics on the cluster;
-  - `/logs`: to provide access to log files exposed by the API server.
+  - `/logs`: to provide access to log files exposed by the API server (deprecated, and disabled by default since v1.31).
 
 > [!CAUTION]
 >
 > Not every endpoint exposed by the API server represents a Kubernetes API group.  
-> For example, `/version`, `/metrics` and `/healthz` are non-resource endpoints.
+> For example, `/version`, `/metrics` and `/livez` are non-resource endpoints.
 
 The resources are exposed through `/api` and `/apis` API paths.
 
-| Component        | URI                                  |
-| ---------------- | ------------------------------------ |
-| Core API groups  | `/api/<version>/<resource>`          |
-| Named API groups | `/apis/<group>/<version>/<resource>` |
-| Other endpoints  | `/<endpoint>`                        |
+| Component                          | URI                                                         |
+| ---------------------------------- | ----------------------------------------------------------- |
+| Core API group                     | `/api/<version>/<resource>`                                 |
+| Named API groups                   | `/apis/<group>/<version>/<resource>`                        |
+| Namespaced resources, core group   | `/api/<version>/namespaces/<namespace>/<resource>`          |
+| Namespaced resources, named groups | `/apis/<group>/<version>/namespaces/<namespace>/<resource>` |
+| Other endpoints                    | `/<endpoint>`                                               |
+
+For example, `/api/v1/pods` lists the Pods of all the namespaces, `/api/v1/namespaces/default/pods/nginx` is the Pod `nginx` of the `default` namespace and `/apis/apps/v1/namespaces/default/deployments` lists the Deployments of the `default` namespace.
 
 > [!NOTE]
 >
@@ -6257,13 +6301,13 @@ Kubernetes API Server
 │
 ├── API discovery / resource APIs
 │   ├── /api/v1
-|   |        ├── pods
-|   |        ├── services
-|   |        ├── namespaces
-|   |        ├── configmaps
-|   |        ├── secrets
-|   |        ├── nodes
-|   |        └── ...
+│   │        ├── pods
+│   │        ├── services
+│   │        ├── namespaces
+│   │        ├── configmaps
+│   │        ├── secrets
+│   │        ├── nodes
+│   │        └── ...
 │   │
 │   └── /apis
 │       ├── /apps/v1
@@ -6276,21 +6320,25 @@ Kubernetes API Server
 │
 └── Other API server endpoints (nonResourceURLs)
     ├── /version
-    ├── /healthz
+    ├── /livez
+    ├── /readyz
     ├── /metrics
-    ├── /logs
     └── ...
 ```
 
-You can discover the available API groups through the API Server itself, normally with the commands:
+You can discover the available API groups through the API Server itself, with the commands:
 
-- `curl https://localhost:6443 -k`;
-- `curl https://localhost:6443/api -k`;
-- `curl https://localhost:6443/apis -k`;
+- `curl https://localhost:6443 -k --key admin.key --cert admin.crt`;
+- `curl https://localhost:6443/api -k --key admin.key --cert admin.crt`;
+- `curl https://localhost:6443/apis -k --key admin.key --cert admin.crt`;
 
-and if you want to check a specific API, you can perform `curl https://localhost:6443/apis/apps/v1 -k`.
+and if you want to check a specific API, you can perform `curl https://localhost:6443/apis/apps/v1 -k --key admin.key --cert admin.crt`.
 
-In order to avoid specifying authentication parameters, you can start a kubectl-proxy with the command
+> [!IMPORTANT]
+>
+> Without credentials, the request is anonymous (user `system:anonymous`): in a cluster with RBAC only `/version`, `/healthz`, `/livez` and `/readyz` are allowed, while `/api`, `/apis` and the resources return `403 Forbidden`.
+
+In order to avoid specifying authentication parameters, you can start a local proxy with the command
 
 ```bash
 kubectl proxy
@@ -6307,8 +6355,10 @@ and you can finally get specific information on a single API with a command like
 > [!TIP]
 >
 > `kubectl proxy` starts a local proxy that forwards requests to the Kubernetes API server.  
-> By default, it listens on `127.0.0.1:8001` and uses the current kubeconfig context to determine how to connect to the API server.
+> By default, it listens on `127.0.0.1:8001` and uses the current kubeconfig context to determine how to connect to the API server.  
 > Using this proxy, we don't have to specify credentials and certificates in each curl command.
+>
+> Without a proxy, `kubectl get --raw <path>` (for example `kubectl get --raw /apis/apps/v1`) sends a request to any API path with the credentials of the kubeconfig.
 
 The API group and version are also reflected in the `apiVersion` field of Kubernetes objects:
 
@@ -6332,16 +6382,26 @@ The API group and version are also reflected in the `apiVersion` field of Kubern
 > For example, `apps/v1` refers to the `apps` API group and its `v1` version.  
 > For resources in the core API group, the group name is omitted and only the version is specified, such as `v1`.
 
-Each resource supports a set of operations, commonly referred to as Kubernetes verbs, such as `get`, `list`, `create`, `update`, `patch`, `delete` and `watch`.
+Each resource supports a set of operations, commonly referred to as Kubernetes verbs, such as `get`, `list`, `create`, `update`, `patch`, `delete`, `deletecollection` and `watch`.
 
 > [!NOTE]
 >
 > Kubernetes verbs should not be confused with HTTP methods.  
-> For example
+> For example:
 >
-> - `kubectl get pods` uses the Kubernetes `get` verb, which is implemented through an HTTP `GET` request;
+> - `kubectl get pods` uses the Kubernetes `list` verb (it reads a collection), implemented through an HTTP `GET` request, while `kubectl get pod nginx` uses the `get` verb;
 > - `kubectl create deployment ...` uses the Kubernetes `create` verb and is implemented using an HTTP `POST` request;
 > - `watch` is implemented using an HTTP `GET` request with the `?watch=true` parameter.
+>
+> | HTTP method   | Kubernetes verb                                                            |
+> | ------------- | -------------------------------------------------------------------------- |
+> | `POST`        | `create`                                                                   |
+> | `GET`, `HEAD` | `get` (single resource), `list` (collection), `watch` (with `?watch=true`) |
+> | `PUT`         | `update`                                                                   |
+> | `PATCH`       | `patch`                                                                    |
+> | `DELETE`      | `delete` (single resource), `deletecollection` (collection)                |
+>
+> This matters for RBAC: a user allowed only to `get` Pods can run `kubectl get pod nginx`, but `kubectl get pods` fails with `cannot list resource "pods"`.
 
 To summarize:
 
@@ -6362,7 +6422,7 @@ To summarize:
         │                               │
         v1                     ┌────────┼────────────────┐
         │                      │        │                │
-┌───────┼────────┐          apps/v1   batch/v1   networking.k8s.io/v1
+┌───────┼────────┐           apps     batch     networking.k8s.io
 │       │        │             │        │                │
 pods  services  configmaps    v1       v1               v1
                                │
@@ -6385,17 +6445,18 @@ API group
 
 Useful commands:
 
-- `kubectl api-versions`: show available API group and version;
-- `kubectl api-resources`: show available resources and the corresponding API group (especially useful when you can't find a resource on the documentation pages);
+- `kubectl api-versions`: show the available API groups and versions, in the form `<group>/<version>`;
+- `kubectl api-resources`: show available resources and the corresponding API group (especially useful when you can't find a resource on the documentation pages); `-o wide` also shows the verbs supported by each resource, `--api-group=<group>` and `--namespaced=true|false` filter the list;
 - `kubectl explain <resource name>`: gives details on the Kind and lists the top level fields and their type;
 - `kubectl explain <resource name>.<field name>`: gives details on the Kind and lists the subfields and their type;
-- `kubectl explain <resource name> --recursive`: lists all fields that we would put in the YAML file.
+- `kubectl explain <resource name> --recursive`: lists all fields that we would put in the YAML file;
+- `kubectl get --raw <API path>`: sends a GET request to any API path, using the credentials of the kubeconfig.
 
 ---
 
 ### Authorization
 
-Authentication answers **"Who are you?"**
+Authentication answers **"Who are you?"**  
 Authorization answers **"What are you allowed to do?"**
 
 We need authorization in a cluster because we want to differentiate the actions that different users can perform. For example:
@@ -6418,12 +6479,14 @@ There are different authorization modes / authorizers:
 | **AlwaysDeny**  | Deny all requests                                                       | kube-apiserver                         |
 
 The modes are set using the `--authorization-mode` option on the kube-apiserver.  
-If this option is not specified, it is set to `AlwaysAllow` by default.
+If this option is not specified (and no `--authorization-config` file is used), it is set to `AlwaysAllow` by default.
 
 > [!NOTE]
 >
-> In practice, production clusters normally configure a more restrictive authorization mode, commonly `Node,RBAC`.  
+> In practice, production clusters normally configure a more restrictive authorization mode, commonly `Node,RBAC` (the kubeadm default).  
 > The `AlwaysAllow` default applies when no authorization mode is explicitly configured.
+>
+> Since v1.32 the authorizers can also be configured with a structured configuration file, passed with `--authorization-config`, as an alternative to `--authorization-mode` (the two options cannot be combined).
 
 You can check the authorization mode configured with the following command:
 
@@ -6437,7 +6500,7 @@ cat /etc/kubernetes/manifests/kube-apiserver.yaml | grep authorization-mode
 
 > [!TIP]
 >
-> Replace `kube-apiserver-controlplane` with the name of the API Server `Pod` in your instance (for example `kube-apiserver-minikube` in Minikube)
+> Replace `kube-apiserver-controlplane` with the name of the API Server `Pod` in your instance (for example `kube-apiserver-minikube` in Minikube).
 
 You may also provide a comma separated list of multiple modes to use, like `--authorization-mode=Node,RBAC,Webhook`.  
 When having multiple modes configured, the request is authorized using each authorizer in the specified order.  
@@ -6447,9 +6510,10 @@ Each authorizer can return:
 - `Deny`: the request is immediately denied;
 - `No opinion`: the request is forwarded to the next authorizer.
 
-If all authorizers return `No opinion`, the request is denied.
+If all authorizers return `No opinion`, the request is denied (HTTP `403 Forbidden`).
 
-In the example above, if a user sends a request, it is first handled by the Node authorizer which returns `No opinion` because it only handles node requests; then the request is forwarded to the RBAC module, which performs its checks and returns `Allow`. The authorization is now complete and the user is given access to the requested resource.
+In the example above, if a user sends a request, it is first handled by the Node authorizer which returns `No opinion` because it only handles node requests; then the request is forwarded to the RBAC module, which performs its checks and returns `Allow`. The authorization is now complete and the user is given access to the requested resource.  
+If no RBAC rule matches, RBAC returns `No opinion` (it never returns `Deny`, because it has no deny rules) and the request goes to the Webhook authorizer.
 
 > [!TIP]
 >
@@ -6473,10 +6537,10 @@ The Node authorizer authorizes kubelets to perform the operations required to ma
   - Endpoints
   - Nodes
   - Pods
-  - Secrets
-  - ConfigMaps
-  - PVCs
-  - PVs
+  - Secrets      ┐
+  - ConfigMaps   │ only the ones related to the Pods
+  - PVCs         │ bound to the kubelet's node
+  - PVs          ┘
 
 - write
   - Node status
@@ -6488,7 +6552,7 @@ and some other resources
 
 > [!TIP]
 >
-> The Node authorizer works together with the NodeRestriction admission plugin to further restrict what a kubelet can modify.
+> The Node authorizer works together with the NodeRestriction admission plugin to further restrict what a kubelet can modify (for example, only its own Node object and the Pods bound to it).
 
 To be authorized by the Node authorizer, a kubelet must authenticate with an identity using the `system:node:<node-name>` username format and belong to the `system:nodes` group.  
 The Node authorizer then grants the kubelet the permissions required to operate its assigned Pods and Node.
@@ -6497,9 +6561,10 @@ The Node authorizer then grants the kubelet the permissions required to operate 
 
 > [!NOTE]
 >
-> ABAC permissions are expressed using the same Kubernetes API concepts introduced in the previous section: API groups, resources and verbs.
+> ABAC permissions are expressed using Kubernetes API concepts introduced in the previous section: API groups, resources and namespaces.  
+> Unlike RBAC, ABAC has no list of verbs: a policy allows either all the operations or, with `readonly: true`, only the read ones.
 
-With ABAC, we create a policy file containing a set of policies defined in JSON format and pass it to the API server.
+With ABAC, we create a policy file containing a set of policies defined in JSON format (one JSON object per line) and pass it to the API server with `--authorization-mode=ABAC` and `--authorization-policy-file=<file>`.  
 For example:
 
 - This policy allows `dev-user` to perform read-only operations on `Pods` in any namespace.
@@ -6514,7 +6579,7 @@ For example:
   {"apiVersion":"abac.authorization.kubernetes.io/v1beta1","kind":"Policy","spec":{"group":"dev-users","namespace":"*","resource":"pods","apiGroup":"*"}}
   ```
 
-- This policy allows members of the `security-1` group to access `CertificateSigningRequest` resources in any namespace.
+- This policy allows members of the `security-1` group to access `CertificateSigningRequest` resources, which are cluster-scoped (the empty `namespace` matches the requests for cluster-scoped resources, while `"*"` would match every namespace and the cluster scope).
 
   ```json
   {"apiVersion":"abac.authorization.kubernetes.io/v1beta1","kind":"Policy","spec":{"group":"security-1","namespace":"","resource":"certificatesigningrequests","apiGroup":"certificates.k8s.io"}}
@@ -6554,19 +6619,21 @@ RBAC represents permissions as Kubernetes API objects. A `Role` or `ClusterRole`
 >
 > RBAC permissions are additive: there are no explicit deny rules in Kubernetes RBAC.
 
-We'll see RBAC in more detail in the next chapters.
+We'll see RBAC in more detail in the next section.
 
 If we want to **outsource the authorization decision** to an external system instead of using only the built-in authorization mechanisms, we can use the `Webhook` authorizer.
 
 For example, we can use a third-party policy engine such as **Open Policy Agent (OPA)**.
 
-In this scenario, Kubernetes sends an authorization request to the external service containing information about the request, such as:
+In this scenario, Kubernetes sends an authorization request (a `SubjectAccessReview` object) to the external service containing information about the request, such as:
 
 - the user or identity;
 - the requested resource;
 - the requested operation;
 - the namespace;
 - other relevant request attributes.
+
+The address of the external service is configured on the API server with the `--authorization-webhook-config-file` option, which points to a file in kubeconfig format.
 
 Then, the external authorization service evaluates the request according to its policies and returns a decision.
 
@@ -6598,13 +6665,13 @@ The flow can therefore be summarized as:
 >
 > The Webhook is specifically used as an **authorization mechanism**: Kubernetes asks the external service whether a particular request should be allowed or denied.
 
-In addition to Authentication and Authorization, a request must also be admitted by the admission controller before it can be persisted:
+In addition to Authentication and Authorization, a request must also be admitted by the admission controllers before it can be persisted:
 
 - Authentication → Who are you?
 - Authorization → What are you allowed to do?
 - Admission → Is this request/object acceptable?
 
-but Admission and Admission Controllers will be covered in more detail in the next section.
+but Admission and Admission Controllers will be covered in more detail in the Admission Controllers section.
 
 ---
 
@@ -6634,7 +6701,7 @@ rules:
   verbs: ["create"]
 ```
 
-or a `ClusterRole` object
+or a `ClusterRole` object, like the built-in `cluster-admin` one, which allows everything:
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -6657,7 +6724,9 @@ rules:
 You can add multiple rules in each `Role`.
 
 Each rule has three sections, as we talked about earlier: `apiGroups`, `resources` and `verbs`.  
-For the core group, we can leave the `apiGroups` section blank; for any other group, we need to specify it.
+For the core group, we must specify an empty string in the `apiGroups` section (`apiGroups: [""]`); for any other group, we need to specify its name.  
+The `apiGroups` field cannot be omitted: a rule without it is rejected with `rules[0].apiGroups: Required value: resource rules must supply at least one api group`.  
+`nonResourceURLs` (like `/healthz` or `/metrics`) can only be used in a `ClusterRole`.
 
 | Resource     | API group |
 | ------------ | --------- |
@@ -6694,10 +6763,11 @@ rules:
 > `resourceNames` does not work with all the operations in the same way.  
 > In particular:
 >
-> - for operations such as `list` and `watch`, the behavior requires careful attention because the request must specify the resource name using `fieldSelector`.
-> - `resourceNames` cannot be used to restrict `create` operations to specific names, because a `create` request does not yet have a resource name available for authorization in the same way that operations on an existing resource do.
+> - for operations such as `list` and `watch` (when they are in the `verbs` of the rule), the request must specify the resource name with a field selector, for example `kubectl get pods --field-selector metadata.name=blue` (a plain `kubectl get pods` is denied);
+> - `resourceNames` cannot be used to restrict `create` (and `deletecollection`) operations to specific names, because a `create` request does not yet have a resource name available for authorization in the same way that operations on an existing resource do.
 
-Create the `Role` or the `ClusterRole` with the usual command `kubectl create -f developer-role.yaml` or `kubectl create -f pod-reader-cluster-role.yaml`.
+Create the `Role` with the usual command `kubectl create -f developer-role.yaml`.  
+The `cluster-admin` `ClusterRole` above, instead, already exists in every cluster: it is one of the default ClusterRoles, so creating it again fails with `AlreadyExists`.
 
 The next step is to link the user to that `Role`.  
 In order to accomplish this, we define another object called `RoleBinding`
@@ -6714,14 +6784,14 @@ subjects:
   apiGroup: rbac.authorization.k8s.io
 - kind: ServiceAccount
   name: my-app
-  apiGroup: rbac.authorization.k8s.io
+  namespace: default
 roleRef:
   kind: Role
   name: developer
   apiGroup: rbac.authorization.k8s.io
 ```
 
-or `ClusterRoleBinding`
+or `ClusterRoleBinding` (the following is also a built-in default object: it grants `cluster-admin` to the `system:masters` group)
 
 ```yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -6745,8 +6815,11 @@ roleRef:
 > - User;
 > - Group;
 > - ServiceAccount.
+>
+> `User` and `Group` subjects use `apiGroup: rbac.authorization.k8s.io`, while a `ServiceAccount` subject has no `apiGroup` (it must be empty) and needs its `namespace` (in a `RoleBinding` it defaults to the namespace of the binding, in a `ClusterRoleBinding` it is required).  
+> For example, a `ServiceAccount` subject with `apiGroup: rbac.authorization.k8s.io` is rejected with `subjects[1].apiGroup: Unsupported value: "rbac.authorization.k8s.io": supported values: ""`.
 
-We can create the object from the manifest with the usual command `kubectl create -f devuser-developer-binding.yaml` or `kubectl create -f dev-user-pod-reader.yaml`.
+We can create the object from the manifest with the usual command `kubectl create -f devuser-developer-binding.yaml`.
 
 ```text
 ┌─────────────┐
@@ -6769,6 +6842,11 @@ The `RoleBinding` or `ClusterRoleBinding` object associates one or more subjects
 - `subjects` is where we specify the user details;
 - `roleRef` is where we provide the details of the created `Role`.
 
+> [!CAUTION]
+>
+> `roleRef` is immutable: changing it fails with `cannot change roleRef`.  
+> To bind the subjects to another role, delete and recreate the binding.
+
 > [!IMPORTANT]
 >
 > `Roles` and `RoleBindings` are namespaced resources.  
@@ -6783,10 +6861,10 @@ The `RoleBinding` or `ClusterRoleBinding` object associates one or more subjects
 > - `ClusterRoles`;
 > - `ClusterRoleBindings`.
 >
-> To grant this type of access, you use a `ClusterRole`, which is typically bound using a `ClusterRoleBinding`.  
+> To grant this type of access, you use a `ClusterRole`, bound using a `ClusterRoleBinding`.  
 > For example, a `ClusterRole` that grants access to `nodes` is inherently useless when associated with a `RoleBinding`, because `nodes` do not belong to a namespace.
 >
-> Cluster-scoped resources → `ClusterRole` required.
+> Cluster-scoped resources → `ClusterRole` and `ClusterRoleBinding` required.  
 > Namespace-scoped resources → `Role` or `ClusterRole`.
 
 Keep in mind that the scope of the given permissions depends on the narrower of the scopes between the Binding and the Role
@@ -6797,11 +6875,15 @@ Keep in mind that the scope of the given permissions depends on the narrower of 
 | `RoleBinding`        | `ClusterRole` | namespace            |
 | `ClusterRoleBinding` | `ClusterRole` | whole cluster        |
 
-and it is not possible to bind a `ClusterRoleBinding` to a `Role`.
+and it is not possible to bind a `ClusterRoleBinding` to a `Role` (`roleRef.kind: Unsupported value: "Role": supported values: "ClusterRole"`).
 
 > [!IMPORTANT]
 >
-> The role type determines what can be referenced; the binding type determines where the permissions are applied.
+> The `Role` or `ClusterRole` defines which permissions are granted; the binding type determines where they apply (a namespace or the whole cluster).
+
+Binding a `ClusterRole` with a `RoleBinding` is useful to define a set of permissions once and reuse it in many namespaces.  
+Kubernetes also has default user-facing `ClusterRoles` meant to be used this way: `view` (read-only, Secrets excluded), `edit` (read/write on most objects) and `admin` (also manages Roles and RoleBindings of the namespace), besides `cluster-admin`.  
+For example, `kubectl create rolebinding my-app-view --clusterrole=view --serviceaccount=default:my-app` gives the `my-app` ServiceAccount read-only access to the `default` namespace.
 
 In order to check if you have access to a particular resource in the cluster, you can use the command `kubectl auth can-i <verb> <resource>`, like for example
 
@@ -6826,16 +6908,24 @@ $ kubectl auth can-i create pods --as dev-user --namespace test
 no
 ```
 
+For a ServiceAccount, use its username `system:serviceaccount:<namespace>:<name>`, for example `kubectl auth can-i list pods --as system:serviceaccount:default:my-app`.
+
+> [!CAUTION]
+>
+> `kubectl auth can-i` checks the current namespace even for cluster-scoped resources (printing `Warning: resource 'nodes' is not namespace scoped`).  
+> So, if a `RoleBinding` binds a `ClusterRole` with `nodes` permissions, `kubectl auth can-i list nodes --as <user>` answers `yes`, while the real `kubectl get nodes --as <user>` is forbidden.  
+> For cluster-scoped resources add `--all-namespaces` (`-A`), which gives the correct answer (`no`).
+
 Useful commands:
 
 - `kubectl get roles [-n <namespace>]`: view the `Roles`;
 - `kubectl get clusterroles`: view the `ClusterRoles`;
 - `kubectl get rolebindings [-n <namespace>]`: view the `RoleBindings`;
 - `kubectl get clusterrolebindings`: view the `ClusterRoleBindings`;
-- `kubectl create role <role name> --verb=<verb1>[,<verb2>][,<verb3>] --resource=<resource>`: imperative command for creating a `Role`;
+- `kubectl create role <role name> --verb=<verb1>[,<verb2>][,<verb3>] --resource=<resource> [--resource-name=<name>]`: imperative command for creating a `Role`;
 - `kubectl create clusterrole node-reader --verb=get,list,watch --resource=nodes`: imperative command example for creating a `ClusterRole`;
-- `kubectl create rolebinding <rolebinding name> --role=<role name> --user=<user name>`: imperative command for creating a `RoleBinding`;
-- `kubectl create rolebinding mike-node-reader --role=node-reader --user=mike`: imperative command example for creating a `RoleBinding`;
+- `kubectl create rolebinding <rolebinding name> --role=<role name> --user=<user name>`: imperative command for creating a `RoleBinding` (also `--clusterrole=<name>`, `--group=<group>` and `--serviceaccount=<namespace>:<name>`);
+- `kubectl create clusterrolebinding mike-node-reader --clusterrole=node-reader --user=mike`: imperative command example for creating a `ClusterRoleBinding` (a `RoleBinding` with `--role=node-reader` would reference a `Role` that does not exist);
 - `kubectl describe role <role_name>`: view the details of a specific `Role`;
 - `kubectl describe rolebinding <rolebinding_name>`: view the details of a specific `RoleBinding`;
 - `kubectl describe clusterrole node-reader`: view the details of a specific `ClusterRole` example;
@@ -6880,19 +6970,24 @@ When a request hits the API Server, we know that it goes
      │   acceptable?   │
      └────────┬────────┘
               │
-     ┌────────┴────────┐
-     │                 │
-  Mutating         Validating
-     │                 │
-modify object       allow/deny
-     │                 │
-     └────────┬────────┘
+              ▼
+         Mutating
+       (modify object)
+              │
+              ▼
+    Object schema validation
+              │
+              ▼
+        Validating
+       (allow/deny)
+              │
               ▼
         Persistence (etcd)
 ```
 
 An Admission Controller intercepts API requests after authentication and authorization and before the object is persisted. It can reject them, and if it is a mutating controller, it can also modify them.  
-Admission controllers are perfect for filtering requests cluster-wide, regardless of the Users, Groups or ServiceAccounts they come from. For example:
+Admission controllers act only on requests that create, modify or delete objects (and on some special operations, like connecting to a Pod through the API server): they do not apply to read requests (`get`, `list` and `watch`).  
+Admission controllers are perfect for enforcing rules cluster-wide on the content of the requests, whatever User, Group or ServiceAccount they come from. For example:
 
 - only permit images from specific registries (internal corporate registries instead of public ones like DockerHub);
 - do not permit containers to run as the root user;
@@ -6905,6 +7000,8 @@ Admission controllers can be of type:
 - **Validating**: checks specific configuration in order to accept or reject the request object;
 - **Mutating**: modifies the object contained in the request before it is persisted.
 
+Some admission controllers are both.
+
 > [!IMPORTANT]
 >
 > Mutating admission happens before validating admission.  
@@ -6916,7 +7013,7 @@ Admission controllers help us implement stronger security measures and enforce h
 Kubernetes provides several built-in admission plugins. Some are enabled by default, while others must be explicitly enabled.  
 A non-exhaustive list of the most relevant is the following
 
-| Admission controller         | Behavior                                                                                                                                                     | enabled by default |
+| Admission controller         | Behavior                                                                                                                                                     | Enabled by default |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ |
 | `NamespaceLifecycle`         | Prevents operations on resources in namespaces that do not exist and handles requests involving namespaces that are terminating                              | :white_check_mark: |
 | `LimitRanger`                | Enforces `LimitRange` constraints, such as default CPU/memory requests and limits and maximum/minimum resource limits for Pods and containers                | :white_check_mark: |
@@ -6926,22 +7023,23 @@ A non-exhaustive list of the most relevant is the following
 | `PodSecurity`                | Enforces the **Pod Security Standards** (`privileged`, `baseline`, `restricted`) on Pods, according to the policy configured for the namespace               | :white_check_mark: |
 | `DefaultTolerationSeconds`   | Adds default tolerations for `not-ready` and `unreachable` taints, allowing Pods to remain bound to a node for a default amount of time before being evicted | :white_check_mark: |
 | `AlwaysPullImages`           | Sets `imagePullPolicy` to `Always` in Pods so that container images are always pulled                                                                        | :x:                |
+| `NodeRestriction`            | Limits the Node and Pod objects that a kubelet can modify (enabled by kubeadm)                                                                               | :x:                |
 | `MutatingAdmissionWebhook`   | Calls external mutating webhooks that can modify the object before it is persisted                                                                           | :white_check_mark: |
 | `ValidatingAdmissionWebhook` | Calls external validating webhooks that can accept or reject a request, but cannot modify the object                                                         | :white_check_mark: |
 | `ValidatingAdmissionPolicy`  | Applies validation policies defined in Kubernetes using CEL expressions; can reject requests that do not satisfy the policy                                  | :white_check_mark: |
 
 > [!NOTE]
 >
-> The exact default of enabled and disabled admission plugins highly depends on the Kubernetes version.
+> The exact set of admission plugins enabled by default depends on the Kubernetes version.
 >
-> There are also deprecated admission controllers, such as:
+> There are also admission controllers that are not enabled by default, such as:
 >
-> - `EventRateLimit`: limits the rate at which Events can be accepted by the API server;
-> - `NamespaceExists`: rejects requests targeting a namespace that does not exist;
+> - `EventRateLimit` (alpha): limits the rate at which Events can be accepted by the API server;
+> - `NamespaceExists`: rejects requests targeting a namespace that does not exist (`NamespaceLifecycle` already does this);
 > - `NamespaceAutoProvision`: automatically creates a namespace when a request targets a namespace that does not exist.
 >
-> The automatic namespace creation feature of the deprecated `NamespaceAutoProvision` controller has not been moved to a new built-in admission controller.  
-> Instead, Kubernetes removed automatic provisioning behavior, and `NamespaceLifecycle` only rejects requests to missing namespaces.
+> The automatic namespace creation is still available, but only if `NamespaceAutoProvision` is enabled explicitly: with it, `kubectl run nginx --image nginx --namespace blue` also creates the `blue` namespace.  
+> The deprecated admission controllers are `AlwaysAdmit` and `AlwaysDeny`.
 
 To test the behavior of the `NamespaceLifecycle` admission controller we can do the following
 
@@ -6968,11 +7066,11 @@ kube-apiserver -h | grep admission-plugins
 
 > [!TIP]
 >
-> Replace `kube-apiserver-controlplane` with the name of the API Server `Pod` in your instance (for example `kube-apiserver-minikube` in Minikube)
+> Replace `kube-apiserver-controlplane` with the name of the API Server `Pod` in your instance (for example `kube-apiserver-minikube` in Minikube).
 
-The result will be something like that
+The result will be something like this:
 
-```bash
+```text
       --admission-control strings                    Admission is divided into two phases. In the first phase, only mutating admission plugins run. In the second phase, only validating admission plugins run. The names in the below list may represent a validating plugin, a mutating plugin, or both. The order of plugins in which they are passed to this flag does not matter. Comma-delimited list of: AlwaysAdmit, AlwaysDeny, AlwaysPullImages, CertificateApproval, CertificateSigning, CertificateSubjectRestriction, ClusterTrustBundleAttest, DefaultIngressClass, DefaultStorageClass, DefaultTolerationSeconds, DenyServiceExternalIPs, EventRateLimit, ExtendedResourceToleration, ImagePolicyWebhook, LimitPodHardAntiAffinityTopology, LimitRanger, MutatingAdmissionPolicy, MutatingAdmissionWebhook, NamespaceAutoProvision, NamespaceExists, NamespaceLifecycle, NodeDeclaredFeatureValidator, NodeRestriction, OwnerReferencesPermissionEnforcement, PersistentVolumeClaimResize, PodNodeSelector, PodSecurity, PodTolerationRestriction, PodTopologyLabels, Priority, ResourceQuota, RuntimeClass, ServiceAccount, StorageObjectInUseProtection, TaintNodesByCondition, ValidatingAdmissionPolicy, ValidatingAdmissionWebhook. (DEPRECATED: Use --enable-admission-plugins or --disable-admission-plugins instead. Will be removed in a future version.)
       --disable-admission-plugins strings            admission plugins that should be disabled although they are in the default enabled plugins list (NamespaceLifecycle, LimitRanger, ServiceAccount, TaintNodesByCondition, PodSecurity, Priority, DefaultTolerationSeconds, DefaultStorageClass, StorageObjectInUseProtection, PersistentVolumeClaimResize, RuntimeClass, CertificateApproval, CertificateSigning, ClusterTrustBundleAttest, CertificateSubjectRestriction, DefaultIngressClass, PodTopologyLabels, NodeDeclaredFeatureValidator, MutatingAdmissionPolicy, MutatingAdmissionWebhook, ValidatingAdmissionPolicy, ValidatingAdmissionWebhook, ResourceQuota). Comma-delimited list of admission plugins: AlwaysAdmit, AlwaysDeny, AlwaysPullImages, CertificateApproval, CertificateSigning, CertificateSubjectRestriction, ClusterTrustBundleAttest, DefaultIngressClass, DefaultStorageClass, DefaultTolerationSeconds, DenyServiceExternalIPs, EventRateLimit, ExtendedResourceToleration, ImagePolicyWebhook, LimitPodHardAntiAffinityTopology, LimitRanger, MutatingAdmissionPolicy, MutatingAdmissionWebhook, NamespaceAutoProvision, NamespaceExists, NamespaceLifecycle, NodeDeclaredFeatureValidator, NodeRestriction, OwnerReferencesPermissionEnforcement, PersistentVolumeClaimResize, PodNodeSelector, PodSecurity, PodTolerationRestriction, PodTopologyLabels, Priority, ResourceQuota, RuntimeClass, ServiceAccount, StorageObjectInUseProtection, TaintNodesByCondition, ValidatingAdmissionPolicy, ValidatingAdmissionWebhook. The order of plugins in this flag does not matter.
       --enable-admission-plugins strings             admission plugins that should be enabled in addition to default enabled ones (NamespaceLifecycle, LimitRanger, ServiceAccount, TaintNodesByCondition, PodSecurity, Priority, DefaultTolerationSeconds, DefaultStorageClass, StorageObjectInUseProtection, PersistentVolumeClaimResize, RuntimeClass, CertificateApproval, CertificateSigning, ClusterTrustBundleAttest, CertificateSubjectRestriction, DefaultIngressClass, PodTopologyLabels, NodeDeclaredFeatureValidator, MutatingAdmissionPolicy, MutatingAdmissionWebhook, ValidatingAdmissionPolicy, ValidatingAdmissionWebhook, ResourceQuota). Comma-delimited list of admission plugins: AlwaysAdmit, AlwaysDeny, AlwaysPullImages, CertificateApproval, CertificateSigning, CertificateSubjectRestriction, ClusterTrustBundleAttest, DefaultIngressClass, DefaultStorageClass, DefaultTolerationSeconds, DenyServiceExternalIPs, EventRateLimit, ExtendedResourceToleration, ImagePolicyWebhook, LimitPodHardAntiAffinityTopology, LimitRanger, MutatingAdmissionPolicy, MutatingAdmissionWebhook, NamespaceAutoProvision, NamespaceExists, NamespaceLifecycle, NodeDeclaredFeatureValidator, NodeRestriction, OwnerReferencesPermissionEnforcement, PersistentVolumeClaimResize, PodNodeSelector, PodSecurity, PodTolerationRestriction, PodTopologyLabels, Priority, ResourceQuota, RuntimeClass, ServiceAccount, StorageObjectInUseProtection, TaintNodesByCondition, ValidatingAdmissionPolicy, ValidatingAdmissionWebhook. The order of plugins in this flag does not matter.
@@ -6980,7 +7078,7 @@ The result will be something like that
 
 > [!IMPORTANT]
 >
-> `--admission-control` is deprecated in favor of `--enable-admission-plugins` and `--disable-admission-plugins`
+> `--admission-control` is deprecated in favor of `--enable-admission-plugins` and `--disable-admission-plugins`.
 
 To find out, instead, **which plugins are configured manually on your API server**, you can:
 
@@ -7000,7 +7098,8 @@ To **enable or disable admission controllers**, you need to edit the kube-apiser
 vi /etc/kubernetes/manifests/kube-apiserver.yaml
 ```
 
-and then modify `--enable-admission-plugins` or `--disable-admission-plugins` accordingly.
+and then modify `--enable-admission-plugins` or `--disable-admission-plugins` accordingly.  
+Since the kube-apiserver is a static Pod, the kubelet recreates it automatically when the manifest changes (the API server is unavailable for a short time).
 
 There are also external **Admission Webhooks**, which are external services that Kubernetes can call in order to make an admission decision for a request.
 
@@ -7115,7 +7214,7 @@ It works this way:
   }
   ```
 
-- the webhook evaluates the request according to its own policies and returns an `AdmissionReview` response to the API server.  
+- the webhook evaluates the request according to its own policies and returns an `AdmissionReview` response to the API server, with the same `uid` as the request.  
   For example, we can have an accepted request from the validating webhook
 
   ```json
@@ -7146,6 +7245,13 @@ It works this way:
   }
   ```
 
+  which the user sees as
+
+  ```console
+  $ kubectl run nginx-pod --image=nginx:latest
+  Error from server: admission webhook "validator.example.com" denied the request: The use of the tag 'latest' is not allowed for images in this cluster.
+  ```
+
   and in case of mutating webhook, we can have a patch to apply to the object
 
   ```json
@@ -7161,12 +7267,23 @@ It works this way:
   }
   ```
 
-For a validating webhook, the `AdmissionReview.AdmissionResponse.allowed` field of the response contains a decision such as:
+The `patch` field is a base64-encoded JSON Patch; the one above decodes to:
+
+```json
+[{"op":"add","path":"/metadata/labels","value":{"env":"production"}}]
+```
+
+> [!CAUTION]
+>
+> An `add` on `/metadata/labels` replaces the whole `labels` map: a Pod created with the labels `app=web,tier=frontend` ends up with the only label `env=production`.  
+> To add a single label, the patch must target the key: `{"op":"add","path":"/metadata/labels/env","value":"production"}` (the `labels` map must already exist).
+
+For a validating webhook, the `response.allowed` field of the `AdmissionReview` contains a decision such as:
 
 - `true`: the request is accepted;
 - `false`: the request is rejected.
 
-A mutating webhook can additionally return a set of modifications to apply to the object, typically using a JSON Patch.
+A mutating webhook can additionally return a set of modifications to apply to the object, using a JSON Patch (`JSONPatch` is the only supported `patchType`).
 
 This is a simplified representation of the webhooks flow (the actual admission chain can contain multiple built-in plugins and multiple webhooks):
 
@@ -7238,12 +7355,12 @@ The important fields are:
 
 - `rules`: defines which API requests are intercepted;
 - `clientConfig`: specifies where the webhook is located, via:
-  - `service`: identifies the Kubernetes Service exposing the webhook;
+  - `service`: identifies the Kubernetes Service exposing the webhook (`port` is optional and defaults to 443);
   - `url`: if deploying the server externally and it is not part of a Kubernetes cluster, used instead of `service`, specifying the exact address of that server;
   - `path`: HTTP path invoked by the API server;
-- `caBundle`: CA certificate used by the API server to verify the webhook server certificate;
-- `admissionReviewVersions`: specifies the `AdmissionReview` API versions supported by the webhook;
-- `sideEffects`: declares whether calling the webhook has side effects.
+  - `caBundle`: base64-encoded CA certificate used by the API server to verify the webhook server certificate;
+- `admissionReviewVersions`: specifies the `AdmissionReview` API versions supported by the webhook (required);
+- `sideEffects`: declares whether calling the webhook has side effects (required: `None` or `NoneOnDryRun`).
 
 The API server communicates with the webhook using the `AdmissionReview` API.
 
@@ -7259,15 +7376,18 @@ The webhook then returns an `AdmissionReview` response containing the admission 
 
 Other relevant fields of Admission Webhooks are:
 
-- `failurePolicy`: specifies what the API server should do if the webhook cannot be reached or fails to respond successfully:
-  - `Fail`: the request is denied;
+- `failurePolicy`: specifies what the API server should do if the webhook cannot be reached or fails to respond successfully (the default is `Fail`):
+  - `Fail`: the request is denied (for example with `Internal error occurred: failed calling webhook "validator.example.com": ... connection refused`);
   - `Ignore`: the request continues without the decision of the webhook;
+- `timeoutSeconds`: how long the API server waits for the webhook (default 10 seconds);
 - `namespaceSelector`: allows the webhook to be triggered only for namespaces that match specific labels;
 - `objectSelector`: allows the webhook to be triggered only for objects that match specific labels.
 
 ```yaml
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
+metadata:
+  name: my-webhook
 webhooks:
   - name: my-webhook.example.com
     objectSelector:
@@ -7283,28 +7403,69 @@ webhooks:
         apiGroups: ["*"]
         apiVersions: ["*"]
         resources: ["*"]
+    clientConfig:
+      service:
+        namespace: webhook-system
+        name: my-webhook
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
 ```
+
+> [!TIP]
+>
+> For simple checks you don't need a webhook server: a `ValidatingAdmissionPolicy` (stable since v1.30) validates the objects with CEL expressions directly in the API server, and a `ValidatingAdmissionPolicyBinding` decides where it applies.
+>
+> ```yaml
+> apiVersion: admissionregistration.k8s.io/v1
+> kind: ValidatingAdmissionPolicy
+> metadata:
+>   name: max-replicas
+> spec:
+>   failurePolicy: Fail
+>   matchConstraints:
+>     resourceRules:
+>     - apiGroups: ["apps"]
+>       apiVersions: ["v1"]
+>       operations: ["CREATE", "UPDATE"]
+>       resources: ["deployments"]
+>   validations:
+>   - expression: "object.spec.replicas <= 5"
+>     message: "replicas must be no greater than 5"
+> ---
+> apiVersion: admissionregistration.k8s.io/v1
+> kind: ValidatingAdmissionPolicyBinding
+> metadata:
+>   name: max-replicas-binding
+> spec:
+>   policyName: max-replicas
+>   validationActions: ["Deny"]
+> ```
+>
+> ```console
+> $ kubectl create deployment big --image=nginx --replicas=6
+> error: failed to create deployment: deployments.apps "big" is forbidden: ValidatingAdmissionPolicy 'max-replicas' with binding 'max-replicas-binding' denied request: replicas must be no greater than 5
+> ```
 
 ---
 
 ### API versions
 
-When an API version is at `v1`, it means that it is a Generally Available stable version.  
+When an API version is at `v1` (or more generally `vX`, like `v2`), it means that it is a Generally Available stable version.  
 But there are other version kinds, like the following:
 
-| Binding            | Alpha                                            | Beta                                                 | GA (stable)                             |
-| ------------------ | ------------------------------------------------ | ---------------------------------------------------- | --------------------------------------- |
-| Version Name       | vXalphaY (eg: `v1alpha1`)                        | vXbetaY (eg: `v1beta1`)                              | vX (eg: `v1`)                           |
-| Enabled by default | No. Can be enabled via flags                     | Usually no ¹                                         | Yes by default                          |
-| Tests              | May lack e2e tests                               | Has e2e tests                                        | Has conformance tests                   |
-| Reliability        | May have bugs                                    | May have minor bugs                                  | Highly reliable                         |
-| Support            | No commitment; may be dropped later              | Commits to complete the feature and move to GA       | Will be present in many future releases |
-| Audience           | Expert users interested in giving early feedback | Users interested beta testing and providing feedback | All users                               |
+| Aspect             | Alpha                                            | Beta                                                     | GA (stable)                                                |
+| ------------------ | ------------------------------------------------ | -------------------------------------------------------- | ---------------------------------------------------------- |
+| Version Name       | vXalphaY (eg: `v1alpha1`)                        | vXbetaY (eg: `v1beta1`)                                  | vX (eg: `v1`)                                              |
+| Enabled by default | No. Can be enabled via flags                     | No ¹                                                     | Yes by default                                             |
+| Tests              | May lack e2e tests                               | Has e2e tests                                            | Has conformance tests                                      |
+| Reliability        | May have bugs                                    | Well tested, may have minor bugs                         | Highly reliable                                            |
+| Support            | No commitment; may be dropped at any time        | The feature won't be dropped, but its details may change | Available in all future releases of the same major version |
+| Audience           | Expert users interested in giving early feedback | Users interested in beta testing and providing feedback  | All users                                                  |
 
-¹ Beta APIs introduced before Kubernetes 1.22 were normally enabled by default.
+¹ Beta APIs introduced before Kubernetes 1.22 were enabled by default; since then, beta API versions are disabled by default.
 
 Alpha versions are used when an API is first developed and becomes part of the Kubernetes release for the very first time.  
-Alpha API groups are not enabled by default.
+Alpha API versions are not enabled by default.
 
 An API may graduate from Alpha to Beta and eventually to GA when the required stability, testing and design criteria are met.
 
@@ -7317,13 +7478,14 @@ But even though multiple versions can coexist, only one can be the preferred ver
 
 > [!NOTE]
 >
-> The example above is for illustrative purposes only.
-> It does not reflect the real version history of the `Deployment` API.
-> The `apps` API group currently only serves the `v1` version.
+> The example above is for illustrative purposes only.  
+> It does not reflect the real version history of the `Deployment` API.  
+> The `apps` API group currently only serves the `v1` version.  
+> A real example is the `autoscaling` group, which serves `v2` and `v1`, with `v2` as the preferred version.
 
-The preferred version is the one used if not differently specified (like when performing the commands `kubectl get <resource>` or `kubectl explain <resource>`).  
+The preferred version is the one used if not differently specified (like when performing the commands `kubectl get <resource>` or `kubectl explain <resource>`); a specific version can be requested with the form `<resource>.<version>.<group>`, for example `kubectl get hpa.v1.autoscaling`.  
 The storage version is the version used by the API server to serialize objects when they are persisted in the storage backend (usually etcd).  
-The API server transparently converts between the API version used by the client and the version used for storage.  
+The API server transparently converts between the API version used by the client and the version used for storage.
 
 ```text
 Client
@@ -7367,12 +7529,12 @@ kubectl get --raw "/apis/batch" | jq
 >
 > (Advanced / useful for understanding, not normally needed for CKAD)
 >
-> As of now, it is not possible to see the storage version of a particular API through an API command.  
-> One way to find it out is to look at the stored object in the etcd server itself.
+> As of now, there is no API command enabled by default to see the storage version of a particular API.  
+> One way to find it out is to look at the stored object in the etcd server itself (on the control plane node; with etcd 3.4 and later `ETCDCTL_API=3` is the default and can be omitted).
 >
 > ```console
 > $ ETCDCTL_API=3 etcdctl \
->   --endpoints=https://:2379 \
+>   --endpoints=https://127.0.0.1:2379 \
 >   --cacert=/etc/kubernetes/pki/etcd/ca.crt \
 >   --cert=/etc/kubernetes/pki/etcd/server.crt \
 >   --key=/etc/kubernetes/pki/etcd/server.key \
@@ -7388,47 +7550,59 @@ kubectl get --raw "/apis/batch" | jq
 > successfully progresse8"2
 > ```
 
-To enable or disable a specific version, we must add it to the `--runtime-config` parameter of the kube-apiserver service:
+To enable or disable a specific version, we must add it to the `--runtime-config` parameter of the kube-apiserver service, in the form `<group>/<version>` (or `v1` for the core group):
 
-- with no value or `=true` if we want to enable a specific API group;
-- with the `=false` value if we want to disable a specific API group.
+- with no value or `=true` if we want to enable a specific API version;
+- with the `=false` value if we want to disable a specific API version.
 
 ```diff
-ExecStart=/usr/local/bin/kube-apiserver \\
-  --advertise-address=\${INTERNAL_IP} \\
-  --allow-privileged=true \\
-  --apiserver-count=3 \\
-  --authorization-mode=Node,RBAC \\
-  --bind-address=0.0.0.0 \\
-  --enable-swagger-ui=true \\
-  --etcd-cafile=/var/lib/kubernetes/ca.pem \\
-  --etcd-certfile=/var/lib/kubernetes/apiserver-etcd-client.crt \\
-  --etcd-keyfile=/var/lib/kubernetes/apiserver-etcd-client.key \\
-  --etcd-servers=https://127.0.0.1:2379 \\
-  --event-ttl=1h \\
-  --kubelet-certificate-authority=/var/lib/kubernetes/ca.pem \\
-  --kubelet-client-certificate=/var/lib/kubernetes/apiserver-etcd-client.crt \\
-  --kubelet-client-key=/var/lib/kubernetes/apiserver-etcd-client.key \\
-  --kubelet-https=true \\
-+ --runtime-config=batch/v2alpha1,authentication.k8s.io/v1beta1=true,storage.k8s.io/v1beta1=false \\
-  --service-account-key-file=/var/lib/kubernetes/service-account.pem \\
-  --service-cluster-ip-range=10.32.0.0/24 \\
-  --service-node-port-range=30000-32767 \\
-  --client-ca-file=/var/lib/kubernetes/ca.pem \\
-  --tls-cert-file=/var/lib/kubernetes/apiserver.crt \\
-  --tls-private-key-file=/var/lib/kubernetes/apiserver.key \\
+ExecStart=/usr/local/bin/kube-apiserver \
+  --advertise-address=${INTERNAL_IP} \
+  --allow-privileged=true \
+  --authorization-mode=Node,RBAC \
+  --bind-address=0.0.0.0 \
+  --client-ca-file=/var/lib/kubernetes/ca.pem \
+  --etcd-cafile=/var/lib/kubernetes/ca.pem \
+  --etcd-certfile=/var/lib/kubernetes/apiserver-etcd-client.crt \
+  --etcd-keyfile=/var/lib/kubernetes/apiserver-etcd-client.key \
+  --etcd-servers=https://127.0.0.1:2379 \
+  --event-ttl=1h \
+  --kubelet-certificate-authority=/var/lib/kubernetes/ca.pem \
+  --kubelet-client-certificate=/var/lib/kubernetes/apiserver-kubelet-client.crt \
+  --kubelet-client-key=/var/lib/kubernetes/apiserver-kubelet-client.key \
++ --runtime-config=coordination.k8s.io/v1alpha2,admissionregistration.k8s.io/v1beta1=true \
+  --service-account-issuer=https://kubernetes.default.svc.cluster.local \
+  --service-account-key-file=/var/lib/kubernetes/service-account.pem \
+  --service-account-signing-key-file=/var/lib/kubernetes/service-account-key.pem \
+  --service-cluster-ip-range=10.32.0.0/24 \
+  --service-node-port-range=30000-32767 \
+  --tls-cert-file=/var/lib/kubernetes/apiserver.crt \
+  --tls-private-key-file=/var/lib/kubernetes/apiserver.key \
   --v=2
 ```
+
+In a kubeadm cluster, the option goes in the `command` of the static Pod manifest `/etc/kubernetes/manifests/kube-apiserver.yaml`.
+
+> [!CAUTION]
+>
+> The group versions must exist in the Kubernetes version in use: older examples use versions that have been removed (like `batch/v2alpha1`), and with them the API server does not start (`group version batch/v2alpha1 that has not been registered`).  
+> The example above is valid for v1.34.
 
 After having modified `--runtime-config`, you need to restart the kube-apiserver (and the controller manager) to apply the changes.
 
 There are also the following options:
 
-- `api/all=false`: disables all API versions that are not strictly necessary (use with caution by combining it with exceptions, e.g., `api/all=false,api/v1=true`);
+- `api/all=false`: disables all API versions (use with caution by combining it with exceptions, e.g., `api/all=false,api/v1=true`);
+- `api/ga=false`: bulk-disables all GA APIs;
 - `api/beta=false`: bulk-disables all Beta APIs across the cluster;
-- `api/alpha=false`: bulk-disables all Alpha APIs across the cluster.
+- `api/alpha=false`: bulk-disables all Alpha APIs across the cluster (`api/alpha=true` enables them all).
 
 that you can combine in interesting ways, like `--runtime-config=api/all=false,api/v1=true` which disables all the APIs and then re-enables only `v1`.
+
+> [!NOTE]
+>
+> That last example comes from the documentation, but in recent versions the API server refuses to start with it: some APIs are required (`API group/version apiregistration.k8s.io/v1 must be enabled`), and API Priority and Fairness needs its own API (`--runtime-config=api/all=false conflicts with --enable-priority-and-fairness=true`).  
+> On v1.34 it works as `--runtime-config=api/all=false,api/v1=true,apiregistration.k8s.io/v1=true` together with `--enable-priority-and-fairness=false`.
 
 ---
 
@@ -7446,8 +7620,8 @@ Removed: API no longer served
 
 Starting from Kubernetes 1.19, when a REST API is deprecated, the API server:
 
-- returns an HTTP Warning header;
-- adds `k8s.io/deprecated: "true"` to the audit event;
+- returns an HTTP Warning header (that `kubectl` prints, for example `Warning: v1 Endpoints is deprecated in v1.33+; use discovery.k8s.io/v1 EndpointSlice`);
+- adds the annotation `k8s.io/deprecated: "true"` to the audit event;
 - exposes the metric `apiserver_requested_deprecated_apis`.
 
 API deprecation follows [several rules](https://kubernetes.io/docs/reference/using-api/deprecation-policy/).
@@ -7468,24 +7642,25 @@ If a resource is converted from `v1alpha1` to `v1alpha2`, even if the structure 
 
 Furthermore, if `v1alpha2` introduces a new field, it must be possible to represent it even when performing a round-trip through `v1alpha1`, possibly using an equivalent field or an annotation.
 
-**Rule #3a**  
+**Rule #3**  
 An API version cannot be deprecated in favor of a less stable version.
 
-GA → Beta       :x:
-GA → Alpha      :x:
-Beta → Alpha    :x:
-Alpha → Beta    :white_check_mark:
-Beta → GA       :white_check_mark:
-Alpha → GA      :white_check_mark:
+| Deprecated version | Replaced by | Allowed            |
+| ------------------ | ----------- | ------------------ |
+| GA                 | Beta        | :x:                |
+| GA                 | Alpha       | :x:                |
+| Beta               | Alpha       | :x:                |
+| Alpha              | Beta        | :white_check_mark: |
+| Beta               | GA          | :white_check_mark: |
+| Alpha              | GA          | :white_check_mark: |
 
 An API version may only be deprecated in favor of an API version with the same or higher stability level.
 
 **Rule #4a**  
-Other than the most recent API versions in each track, older API versions must
-be supported after their announced deprecation for a duration of no less than:
+The API lifetime is determined by the API stability level:
 
-- **GA**: must be supported for at least 12 months or 3 releases after deprecation, whichever is longer; after deprecation, must not be removed within the same major version;
-- **Beta**: must be supported for at least 9 months or 3 minor releases after introduction, whichever is longer; after deprecation, it must remain served for at least 9 months or 3 minor releases, whichever is longer;
+- **GA**: can be marked as deprecated, but must not be removed within a major version of Kubernetes (and there are no plans for a new major version that removes GA APIs);
+- **Beta**: must be deprecated no more than 9 months or 3 minor releases after introduction (whichever is longer), and is no longer served 9 months or 3 minor releases after deprecation (whichever is longer);
 - **Alpha**: can be removed in any release without previous deprecation notice.
 
 **Rule #4b**  
@@ -7495,7 +7670,7 @@ This allows an upgrade to be rolled back while maintaining compatibility with ob
 
 The `kubectl convert` command lets you convert YAML manifests with the syntax `kubectl convert -f <old file> --output-version <new-api>`.  
 For example `kubectl convert -f nginx.yaml --output-version apps/v1`.  
-The `kubectl convert` command may not be available on the system because it is a plugin that needs to be installed separately.
+The `kubectl convert` command may not be available on the system because it is a plugin (`kubectl-convert`) that needs to be installed separately: without it, the command fails with `error: unknown command "convert" for "kubectl"`.
 
 ---
 
