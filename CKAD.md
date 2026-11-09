@@ -7943,7 +7943,7 @@ $ kubectl create -f flightticket.yaml   # with the unknown field seat: 12A
 Error from server (BadRequest): error when creating "flightticket.yaml": FlightTicket in version "v1" cannot be handled as a FlightTicket: strict decoding error: unknown field "spec.seat"
 ```
 
-Unknown fields are rejected because `kubectl` validates strictly by default: with `--validate=warn` or `--validate=false`, the object is created and the unknown fields are removed (_pruned_) before it is stored in etcd.
+Unknown fields are rejected because `kubectl` validates strictly by default: with `--validate=warn` or `--validate=false`, the object is created and the unknown fields are removed (pruned) before it is stored in etcd.
 
 A custom resource cannot be created before its CRD. For example, when the CRD and the resource are created together, `kubectl` may fail with
 
@@ -8174,12 +8174,12 @@ Finally, when we delete the application, we need to `kubectl delete` all of them
 >
 > You could use a single YAML file for all the resources instead of having one for each, but it will probably make it even harder to identify which parts are responsible for the required resources.
 
-Helm changes this paradigm.
+Helm changes this paradigm.  
 If Kubernetes takes care of making all the individually declared objects exist in our cluster, Helm takes care of the representation of an application as a whole.  
 Helm looks at those objects as part of one big package, and that's why it's also defined as a package manager for Kubernetes.  
 We don't tell Helm which objects it should touch, we just tell it instead what package we want it to act on.
 
-With Helm, instead of having multiple manifests in multiple YAML files, you can specify all the (default) values in the `values.yaml` file of the chart.  
+With Helm, instead of modifying multiple manifests in multiple YAML files, you can specify all the configurable (default) values in the `values.yaml` file of the chart, like in this excerpt of the Bitnami WordPress chart:
 
 ```yaml
 ## User of the application
@@ -8209,7 +8209,7 @@ wordpressFirstName: FirstName
 wordpressLastName: LastName
 ```
 
-The first step is to convert relevant values from the manifest files to variables.  
+The first step is to convert relevant values from the manifest files to variables.
 
 ```yaml
 apiVersion: apps/v1
@@ -8242,13 +8242,13 @@ kind: PersistentVolume
 metadata:
   name: wordpress-pv
 spec:
+  storageClassName: manual
   capacity:
     storage: {{ .Values.storage }}
   accessModes:
   - ReadWriteOnce
-  gcePersistentDisk:
-    pdName: wordpress-2
-    fsType: ext4
+  hostPath:
+    path: /mnt/data/wordpress
 ```
 
 ```yaml
@@ -8259,6 +8259,7 @@ metadata:
   labels:
     app: wordpress
 spec:
+  storageClassName: manual
   accessModes:
   - ReadWriteOnce
   resources:
@@ -8278,15 +8279,17 @@ data:
 Then, those variable values are defined in the `values.yaml` file, for example:
 
 ```yaml
-image: wordpress:4.8-apache
+image: wordpress:7.1-apache
 storage: 30Gi
 passwordEncoded: SGVsbG8sIEFsZXNzYW5kcm8ncyBub3RlcyBoZXJl
 ```
 
+Templates can also transform the values with functions: for example, with `key: {{ .Values.password | b64enc }}` the password is written in `values.yaml` as plain text and encoded in base64 during the rendering.
+
 > [!WARNING]
 >
 > Values files are not a secure secret store.  
-> Sensitive values placed in values.yaml can be exposed in source control or Helm configuration.
+> Sensitive values placed in `values.yaml` (or passed with `--set`) can be exposed in source control, and they are saved in the release information stored in the cluster, where anyone who can read the Secrets of the namespace can retrieve them (for example with `helm get values`).
 
 Finally, you can install it with:
 
@@ -8296,11 +8299,12 @@ helm install wordpress ./wordpress
 
 > [!NOTE]
 >
-> A chart can be installed from a repository, a local directory, an archive, and also directly from an OCI registry.  
+> A chart can be installed from a repository, a local directory, an archive (local or remote), and also directly from an OCI registry.  
 > For example, all the following are valid:
 >
 > - `helm install wordpress bitnami/wordpress`
 > - `helm install wordpress ./wordpress`
+> - `helm install wordpress ./wordpress-1.0.0.tgz`
 > - `helm install wordpress https://example.com/wordpress-1.0.0.tgz`
 > - `helm install wordpress oci://registry-1.docker.io/bitnamicharts/wordpress`
 >
@@ -8308,13 +8312,13 @@ helm install wordpress ./wordpress
 
 Furthermore, you can set:
 
-- custom settings in another specific file that you can give as input, with the `-f` option
+- custom settings in another specific file that you can give as input, with the `-f` (`--values`) option;
 
   ```bash
   helm install my-release ./mychart -f my-values.yaml
   ```
 
-- custom settings via specific variables, with the `--set` option
+- custom settings via specific variables, with the `--set` option.
 
   ```bash
   helm install my-release ./mychart --set image.tag=1.2.3
@@ -8325,7 +8329,7 @@ Furthermore, you can set:
 > Keep in mind that:
 >
 > - the `values.yaml` of the chart represents the default configuration;
-> - the values passed with the `-f` parameter take precedence over the default values and, if present, override them;
+> - the values passed with the `-f` parameter take precedence over the default values and, if present, override them (with more `-f` files, the rightmost one wins);
 > - the values passed explicitly with the `--set` option take precedence over the previous two and, if present, override them both.
 
 So a combination of templates + the values gives us the final version of definition files that can be used to deploy the application.  
@@ -8352,13 +8356,16 @@ Kubernetes manifests
        etcd
 ```
 
-A single Helm chart may be used to deploy a simple application and has:
+A Helm chart contains:
 
-- the template files;
-- the values.yaml file with the variables;
-- `Chart.yaml` with information about the chart itself.
+- the template files, in the `templates/` directory;
+- the `values.yaml` file with the default values of the variables;
+- `Chart.yaml` with information about the chart itself, like its name, the chart version (`version`) and the version of the application (`appVersion`);
+- optionally, other files, like the charts it depends on (in the `charts/` directory) and a `README.md`.
 
-We can create our own chart for the application or explore the existing charts from [Artifact Hub](https://artifacthub.io/) uploaded from other users.  
+The command `helm create <chart-name>` creates the skeleton of a new chart, with these files and some example templates.
+
+We can create our own chart for the application or explore the existing charts from [Artifact Hub](https://artifacthub.io/), which lists the charts published in many different repositories.  
 You can search for them either using the web interface or the CLI
 
 ```console
@@ -8372,16 +8379,17 @@ https://artifacthub.io/packages/helm/wordpress-...      1.0.2           1.0.0   
 ...
 ```
 
-Artifact Hub is the community-driven chart repository, but there are other repositories as well, like the Bitnami Helm repository.  
-To search for charts in other repositories, you must first add a repository to the local Helm setup
+Artifact Hub is not a chart repository itself: it is a catalog of the charts hosted in many repositories, like the Bitnami one.  
+To install a chart or to search it with `helm search repo` (which searches only local data), you must first add its repository to the local Helm setup
 
 ```console
 $ helm repo add bitnami https://charts.bitnami.com/bitnami
+"bitnami" has been added to your repositories
+
 $ helm search repo wordpress
 NAME                                    CHART VERSION   APP VERSION     DESCRIPTION
 bitnami/wordpress                       30.0.9          6.9.4           WordPress is the world's most popular blogging ...
 bitnami/wordpress-intel                 2.1.31          6.1.1           DEPRECATED WordPress for Intel is the most popu...
-helm-helm-stable-proxy/wordpress        9.0.3           5.3.2           DEPRECATED Web publishing platform for building...
 ```
 
 ```console
@@ -8390,10 +8398,15 @@ NAME      URL
 bitnami   https://charts.bitnami.com/bitnami
 ```
 
+> [!NOTE]
+>
+> Bitnami now documents the installation of its charts directly from its OCI registry, without adding a repository (for example `helm install my-release oci://registry-1.docker.io/bitnamicharts/wordpress`).  
+> Moreover, since August 2025 the free Debian-based Bitnami images have been moved to the Bitnami Legacy registry (`bitnamilegacy`), which no longer receives updates, while the maintained images are the Bitnami Secure Images (free only in part, for development and testing): the Bitnami charts are fine for practicing, but check which images they use before relying on them.
+
 After finding the chart, the next step is to install it on the cluster with the `helm install` command, followed by the release name and the chart name.  
 When this command is run, the Helm chart is downloaded from the repository and extracted, and its resources are then installed on the cluster.
 
-Each installation of a chart is called a "Release"; each release has a release name (which is the one you specify with the `helm install` command).  
+Each installation of a chart is called a "Release"; each release has a release name (which is the one you specify with the `helm install` command), which must be unique within its namespace.  
 For instance, you can install the same application using the same chart multiple times by changing the release name each time you run the command
 
 ```bash
@@ -8404,7 +8417,7 @@ helm install release-3 bitnami/wordpress
 
 In the case above, we have three releases of the same chart.
 
-To list installed packages, run the `helm list` command
+To list the installed releases, run the `helm list` command
 
 ```console
 $ helm list
@@ -8416,17 +8429,17 @@ release-3       default         1               2026-08-24 10:52:21.933218456 +0
 
 > [!NOTE]
 >
-> Chart version and app version are different concepts.  
+> Chart version and app version are different concepts: the chart version (`30.0.9` in `wordpress-30.0.9`) is the version of the package, while the app version (`6.9.4`) is the version of the application it installs.  
 > A chart is the package; a release is a deployed instance of that chart.
 
-to uninstall packages, run the `helm uninstall` command
+To uninstall a release, run the `helm uninstall` command
 
 ```console
 $ helm uninstall release-1
 release "release-1" uninstalled
 ```
 
-you can also download the chart without uninstalling with the `helm pull` command
+You can also download a chart without installing it, with the `helm pull` command (it downloads the `.tgz` archive of the chart, and with `--untar` it also extracts it)
 
 ```console
 $ helm pull --untar bitnami/wordpress
@@ -8440,7 +8453,8 @@ The goal is to manually edit the `values.yaml` file to change the required value
 helm install release-4 ./wordpress
 ```
 
-Helm maintains a Release associated with each installation; then, each `helm upgrade` creates a new revision, and you can roll back to a specific revision with the `helm rollback` command.
+Helm maintains a Release associated with each installation; then, each `helm upgrade` creates a new revision, and you can roll back to a specific revision with the `helm rollback` command.  
+Every install, upgrade or rollback increases the revision number by 1: a rollback does not delete the following revisions, but creates a new one with the configuration of the chosen revision.
 
 ```text
 Chart + Values
@@ -8452,6 +8466,24 @@ Chart + Values
       ├── revision 2
       └── revision 3
 ```
+
+For example, after an install, an upgrade and `helm rollback web 1`:
+
+```console
+$ helm history web
+REVISION        UPDATED                         STATUS          CHART                   APP VERSION     DESCRIPTION
+1               Mon Nov  9 07:26:59 2026        superseded      nginx-chart-0.1.0       1.27            Install complete
+2               Mon Nov  9 07:27:01 2026        superseded      nginx-chart-0.1.0       1.27            Upgrade complete
+3               Mon Nov  9 07:27:04 2026        deployed        nginx-chart-0.1.0       1.27            Rollback to 1
+```
+
+Helm stores the information of each revision (chart, values and rendered manifests) in a `Secret` of the release namespace, named `sh.helm.release.v1.<release>.v<revision>` (type `helm.sh/release.v1`): you can list them with `kubectl get secrets -l owner=helm`.
+
+> [!CAUTION]
+>
+> A `helm upgrade` with new values (`-f` or `--set`) starts again from the default values of the chart: the values passed in the previous install or upgrade are lost, unless we add `--reuse-values`.  
+> For example, after `helm install web ./nginx-chart --set replicaCount=3`, the command `helm upgrade web ./nginx-chart --set image.tag=1.28` brings the replicas back to the default value (1).  
+> Without new values, instead, `helm upgrade` reuses the values of the last release.
 
 The following file is a Helm template rather than a static Kubernetes manifest.
 
@@ -8476,7 +8508,7 @@ spec:
 ```
 
 The `{{ ... }}` expressions are Helm template expressions that are evaluated when the chart is rendered or installed. Their values can come from the chart's `values.yaml` file or from additional values files or command-line options.  
-`.Values` contains values provided by the chart configuration, while `.Chart` exposes metadata defined in `Chart.yaml`.  
+`.Values` contains values provided by the chart configuration, `.Chart` exposes metadata defined in `Chart.yaml` and `.Release` contains information about the release (like `{{ .Release.Name }}` and `{{ .Release.Namespace }}`).  
 For example, `{{ .Values.replicaCount }}` is replaced with the configured number of replicas, while `{{ .Values.image.tag }}` determines which NGINX image tag is used.  
 The same template can therefore be reused across different environments without duplicating the Kubernetes manifest. Only the values that change between environments need to be provided separately.
 
@@ -8499,7 +8531,12 @@ environments/
 ```
 
 The `templates/` directory contains the Kubernetes resource templates, which are shared across environments. The `environments/` directory contains values files that provide different configuration for development, staging, and production.  
-For example, the same `nginx-deployment.yaml` template can be rendered using `values-dev.yaml` for development and `values-production.yaml` for production. This allows the Kubernetes resources to remain consistent while environment-specific settings such as replica counts, image tags, or resource limits can vary.
+For example, the same `nginx-deployment.yaml` template can be rendered using `values-dev.yaml` for development (`helm install web ./my-chart -f environments/values-dev.yaml`) and `values-production.yaml` for production. This allows the Kubernetes resources to remain consistent while environment-specific settings such as replica counts, image tags, or resource limits can vary.
+
+> [!NOTE]
+>
+> Helm 4 was released in November 2025, while Helm 3 receives security fixes until February 10, 2027.  
+> The commands in this chapter work with both versions, but in Helm 4 the resources are applied with server-side apply by default and some flags have been renamed (for example `--atomic` → `--rollback-on-failure` and `--force` → `--force-replace`: the old names still work, with a deprecation warning).
 
 Useful commands:
 
@@ -8507,20 +8544,25 @@ Useful commands:
 - `helm env`: retrieve the Helm client environment information;
 - `helm version`: get information on the Helm version;
 - `--debug`: flag that can be added to other Helm commands (e.g. `helm install --debug`) to enable verbose output;
-- `helm install <release> <chart> -f values.yaml`: install the application defined in the `values.yaml`;
-- `helm install --dry-run <release> <chart>`: simulate the chart installation without actually performing it;
+- `helm create <chart-name>`: create the skeleton of a new chart;
+- `helm install <release> <chart> -f values.yaml`: install a chart, overriding its default values with the ones in `values.yaml`;
+- `helm install <release> <chart> -n <namespace> --create-namespace`: install the release in a namespace, creating the namespace if it does not exist;
+- `helm install <release> <chart> --version <version>`: install a specific version of the chart;
+- `helm install <release> <chart> --dry-run=client`: simulate the chart installation without actually performing it (`--dry-run` alone also works, but Helm 4 marks it as deprecated);
 - `helm template <release> <chart>`: render the chart locally (it generates the Kubernetes manifests) without installing it (e.g. `helm template wordpress ./wordpress` or `helm template wordpress bitnami/wordpress`);
 - `helm history <release>`: see the different revisions of a release;
 - `helm status <release>`: check the status of the release;
-- `helm get values <release>`: retrieve the values used by a given release;
+- `helm get values <release>`: retrieve the values set by the user for a given release (`--all` also shows the default ones);
+- `helm get manifest <release>`: retrieve the Kubernetes manifests rendered for a given release;
 - `helm upgrade <release> <chart> -f values.yaml`: modify the application with the new values provided in the `values.yaml` file;
+- `helm upgrade --install <release> <chart>`: upgrade the release or, if it does not exist yet, install it;
 - `helm rollback <release>`: roll back to the previous revision;
 - `helm rollback <release> [REVISION]`: roll back to a specific revision;
 - `helm uninstall <release>`: uninstall the application;
 - `helm list -A`: list all the releases in all namespaces;
 - `helm search hub <words-to-search>`: search charts in the Artifact Hub;
-- `helm search repo <words-to-search>`: search charts in the locally configured repositories;
-- `helm show values <chart>`: check the values.yaml of a chart before installing it;
+- `helm search repo <words-to-search>`: search charts in the locally configured repositories (`--versions` also shows the older versions);
+- `helm show values <chart>`: check the `values.yaml` of a chart before installing it (`helm show chart` and `helm show readme` show its `Chart.yaml` and its README);
 - `helm pull <chart>`: download the chart as an archive;
 - `helm pull --untar <chart>`: download the chart and extract it;
 - `helm repo add <repo-name> <repo-url>`: add a new chart repository, e.g. `helm repo add bitnami https://charts.bitnami.com/bitnami`;
@@ -8534,7 +8576,8 @@ Useful commands:
 Kustomize lets us customize existing Kubernetes manifests without modifying the original YAML files.  
 This is particularly useful when the same application needs different configurations for different environments: it lets us reuse our configurations and only modify what needs to be changed on a per-environment basis (avoiding repeating the configuration manifests for both the common and different parts).
 
-Kustomize comes built into `kubectl`; however, you may want to install the Kustomize CLI separately to get the latest version.
+Kustomize comes built into `kubectl`; however, you may want to install the Kustomize CLI separately to get the latest version.  
+`kubectl kustomize <directory>` is the equivalent of `kustomize build <directory>`, and `kubectl version --client` also shows the version of the embedded Kustomize (v5.7.1 in kubectl v1.34).
 
 ### The kustomization.yaml file and the folder structure
 
@@ -8555,8 +8598,10 @@ The `kustomization.yaml` file describes:
 > - nginx-deployment.yaml
 > - nginx-service.yaml
 >
-> commonLabels:
->   goal: CKAD
+> labels:
+> - pairs:
+>     goal: CKAD
+>   includeSelectors: true
 > ```
 >
 > They are technically optional — Kustomize will pick up default values — but you can hardcode those values in order to prevent breaking changes in the future.
@@ -8585,8 +8630,10 @@ resources:
 - nginx-service.yaml
 
 # Customizations that need to be made
-commonLabels:
-  goal: CKAD
+labels:
+- pairs:
+    goal: CKAD
+  includeSelectors: true # also add the labels to the selectors and to the Pod templates
 ```
 
 ```yaml
@@ -8618,19 +8665,24 @@ spec:
   ports:
   - port: 80
     protocol: TCP
-    targetPort: 3000
+    targetPort: 80
   selector:
     component: nginx
   type: LoadBalancer
 ```
 
+> [!NOTE]
+>
+> In many examples you'll find the older `commonLabels` field (`commonLabels: {goal: CKAD}`), which has the same effect as `labels` with `includeSelectors: true`.  
+> `commonLabels` still works, but it is deprecated: `kustomize build` prints `# Warning: 'commonLabels' is deprecated. Please use 'labels' instead.` and `kustomize edit fix` converts it automatically.
+
 ---
 
 ### Building and applying Kustomize configurations
 
-When running `kustomize build <directory>`, Kustomize looks for a file named, by default, `kustomization.yaml`, in the specified directory.
+When running `kustomize build <directory>`, Kustomize looks for a file named, by default, `kustomization.yaml` (`kustomization.yml` and `Kustomization` are accepted too), in the specified directory.
 
-The command `kustomize build kubernetes_manifests/` will generate the manifests as follows
+The command `kustomize build kubernetes_manifests/` (or `kubectl kustomize kubernetes_manifests/`) will generate the manifests as follows
 
 ```console
 $ kustomize build kubernetes_manifests
@@ -8644,10 +8696,10 @@ spec:
   ports:
   - port: 80
     protocol: TCP
-    targetPort: 3000
+    targetPort: 80
   selector:
-    goal: CKAD
     component: nginx
+    goal: CKAD
   type: LoadBalancer
 ---
 apiVersion: apps/v1
@@ -8660,13 +8712,13 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      goal: CKAD
       component: nginx
+      goal: CKAD
   template:
     metadata:
       labels:
-        goal: CKAD
         component: nginx
+        goal: CKAD
     spec:
       containers:
       - image: nginx
@@ -8717,6 +8769,8 @@ Now we can perform `kubectl` commands relative to a directory, and they will app
 kubectl apply -f kubernetes/api
 kubectl apply -f kubernetes/db
 ```
+
+Keep in mind that `kubectl apply -f <directory>` only reads the files of that directory: to include its subdirectories too, add `-R` (`--recursive`), for example `kubectl apply -f kubernetes/ -R`.
 
 If the structure grows (quantity of directories and subdirectories, number of resources managed), it starts to get difficult to apply what is needed to a specific environment and application.  
 We can instead create a `kustomization.yaml` file in the root of our directory and list there all the resources we want to manage
@@ -8799,7 +8853,7 @@ resources:
 - kafka/
 ```
 
-and when we do that, Kustomize will look for a `kustomization.yaml` file in those directories and import all of those.  
+and when we do that, Kustomize will look for a `kustomization.yaml` file in those directories and import all of those (if a directory has no kustomization file, the build fails with `unable to find one of 'kustomization.yaml', 'kustomization.yml' or 'Kustomization' in directory ...`).  
 This approach will allow us to keep the structure as clean as possible and to apply the changes still with one command.
 
 ---
@@ -8810,17 +8864,17 @@ Kustomize has several built-in transformers (you can even create your own).
 
 Here are some examples of the default transformers:
 
-- **commonLabels**: adds a label to all Kubernetes resources;
-- **namePrefix/Suffix**: adds a common prefix or suffix to all resource names;
+- **labels**: adds labels to all Kubernetes resources (it replaces the deprecated **commonLabels**);
+- **namePrefix/nameSuffix**: adds a common prefix or suffix to all resource names (and updates the references to the renamed resources, for example to a `ConfigMap` used in `envFrom`);
 - **namespace**: adds a common namespace to all resources;
 - **commonAnnotations**: adds an annotation to all Kubernetes resources;
-- **images**: updates the specified image key values found in paths that include `containers` and `initcontainers` sub-paths. If found, the `image` key value is customized by the values set in the `newName`, `newTag`, and `digest` fields. The `name` field should match the `image` key value in a resource.
+- **images**: updates the specified image key values found in paths that include `containers` and `initContainers` sub-paths. If found, the `image` key value is customized by the values set in the `newName`, `newTag`, and `digest` fields. The `name` field should match the `image` key value in a resource.
 
 > [!NOTE]
 >
-> `commonLabels` can also update selectors where appropriate.  
-> This is useful for keeping labels and selectors consistent,
-> but it should be used carefully because changing selectors can affect how resources identify their Pods.
+> By default, `labels` only adds the labels to the `metadata` of the resources: with `includeTemplates: true` it adds them also to the Pod templates, and with `includeSelectors: true` also to the selectors (like `commonLabels`).  
+> This is useful for keeping labels and selectors consistent, but it should be used carefully because changing selectors can affect how resources identify their Pods.  
+> Moreover, the `spec.selector` of a `Deployment` is immutable: changing a label included in the selectors of a `Deployment` that is already deployed makes `kubectl apply` fail with `spec.selector: Invalid value: ...: field is immutable`.
 
 Let's make some examples starting from the following definition file
 
@@ -8844,7 +8898,7 @@ spec:
         name: nginx
 ```
 
-We have already seen the `commonLabels` transformer in action.
+We have already seen the `labels` transformer in action.
 
 With the `namespace` transformer, applying the following kustomization.yaml
 
@@ -8875,11 +8929,11 @@ spec:
         name: nginx
 ```
 
-With the `namePrefix/Suffix` transformer instead, in this example we want to add the prefix `CKAD-` and the suffix `-dev`.  
+With the `namePrefix` and `nameSuffix` transformers instead, in this example we want to add the prefix `ckad-` and the suffix `-dev`.  
 So with the following kustomization.yaml
 
 ```yaml
-namePrefix: CKAD-
+namePrefix: ckad-
 nameSuffix: -dev
 ```
 
@@ -8890,7 +8944,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
 - name: nginx-deployment
-+ name: CKAD-nginx-deployment-dev
++ name: ckad-nginx-deployment-dev
 spec:
   replicas: 1
   selector:
@@ -8905,6 +8959,10 @@ spec:
       - image: nginx
         name: nginx
 ```
+
+> [!CAUTION]
+>
+> Resource names must be lowercase (RFC 1123): `kustomize build` accepts a prefix like `CKAD-`, but then `kubectl apply` rejects the resource with `metadata.name: Invalid value: "CKAD-nginx-deployment-dev": a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters, '-' or '.' ...`.
 
 As an example of the `commonAnnotations` transformer, with the following kustomization.yaml
 
@@ -8939,7 +8997,7 @@ spec:
         name: nginx
 ```
 
-If using the `image` transformer for changing the image repository from `nginx` to `haproxy`, we can use this configuration
+If using the `images` transformer for changing the image repository from `nginx` to `haproxy`, we can use this configuration
 
 ```yaml
 images:
@@ -8970,12 +9028,12 @@ spec:
         name: nginx
 ```
 
-If we instead only want to change the tag of the image, without changing the image repository, we can still do that with the `image` transformer with the following configuration
+If we instead only want to change the tag of the image, without changing the image repository, we can still do that with the `images` transformer with the following configuration
 
 ```yaml
 images:
   - name: nginx
-    newTag: 2.4
+    newTag: "1.27"
 ```
 
 and obtain this result
@@ -8997,11 +9055,16 @@ spec:
     spec:
       containers:
 -     - image: nginx
-+     - image: nginx:2.4
++     - image: nginx:1.27
         name: nginx
 ```
 
-With the `image` transformer we can also override both the image repository and its tag, the digest and any combination; also, we can set more than one override in the `kustomization.yaml`
+> [!CAUTION]
+>
+> `newTag` must be a string: a tag that looks like a number (like `1.27` or `2`) must be quoted, otherwise the build fails with `invalid Kustomization: json: cannot unmarshal number into Go struct field ... newTag of type string`.  
+> The command `kustomize edit set image nginx=nginx:1.27` adds the quotes for us.
+
+With the `images` transformer we can also override both the image repository and its tag, the digest and any combination; also, we can set more than one override in the `kustomization.yaml`
 
 ```yaml
 images:
@@ -9013,7 +9076,7 @@ images:
   - name: my-demo-app
     newName: my-app
   - name: alpine
-    digest: sha256:25a0d4
+    digest: sha256:25a0d4 # shortened digest
 ```
 
 ---
@@ -9025,16 +9088,15 @@ Kustomize patches provide another method to modify Kubernetes configurations.
 Unlike default transformers, patches provide a more "surgical" approach to target one or more specific sections in a Kubernetes resource.  
 This is useful in situations like when we need to update the number of replicas in a specific `Deployment`.
 
-To create a patch we need to provide 3 parameters:
+To create a patch (in the JSON6902 format, described below) we need to provide 3 parameters:
 
-- **operation type**: the most used are "add", "remove" or "replace";
-- **target**: what resource should this patch be applied on:
-  - Kind;
-  - API version / group;
-  - name;
-  - namespace;
-  - labelSelector;
-  - annotationSelector;
+- **operation type**: the most used are `add`, `remove` and `replace` (there are also `move`, `copy` and `test`);
+- **target**: what resource should this patch be applied on, selected by:
+  - `group`, `version` and `kind`;
+  - `name`;
+  - `namespace`;
+  - `labelSelector`;
+  - `annotationSelector`;
 - **value**: what value should be used when replacing or adding (only needed for add or replace operations).
 
 Let's make some examples starting from the same Deployment definition as before
@@ -9087,7 +9149,8 @@ patches:
 
 > [!NOTE]
 >
-> The `|-` part is for stating that we are applying an "inline patch"
+> `|-` is the YAML syntax for a multi-line string (a literal block, without the final newline).  
+> The patch is inline because it is written in the `patch` field, while with the `path` field it is read from a separate file.
 
 This is the structure of a **JSON6902** patch (based on RFC 6902, the JSON Patch standard);  
 there is also another way, which is the **strategic merge patch**, in which we only include the manifest fields we want to change.
@@ -9129,10 +9192,10 @@ the other one is by providing a separate file in which we'll provide the patch, 
 
   ```yaml
   patches:
-    - replica-patch.yaml
+    - path: replica-patch.yaml
   ```
 
-  and the following `replica-patch.yaml`
+  (without `target`, since the resource is identified by the `apiVersion`, `kind` and `metadata.name` of the patch) and the following `replica-patch.yaml`
 
   ```yaml
   apiVersion: apps/v1
@@ -9142,6 +9205,10 @@ the other one is by providing a separate file in which we'll provide the patch, 
   spec:
     replicas: 5
   ```
+
+> [!CAUTION]
+>
+> Each item of `patches` must be an object with the `path` (or `patch`) field: a plain list of file names, like `- replica-patch.yaml`, is the syntax of the deprecated `patchesStrategicMerge` field, and in `patches` it makes the build fail with `invalid Kustomization: json: cannot unmarshal string into ... of type types.Patch`.
 
 Let's say now that we want to replace the value of `spec.template.metadata.labels.component` to `web`
 
@@ -9162,7 +9229,7 @@ Let's say now that we want to replace the value of `spec.template.metadata.label
 
   ```yaml
   patches:
-    - label-patch.yaml
+    - path: label-patch.yaml
   ```
 
   ```yaml
@@ -9176,6 +9243,10 @@ Let's say now that we want to replace the value of `spec.template.metadata.label
         labels:
           component: web
   ```
+
+> [!CAUTION]
+>
+> This example only shows how patches work: the template labels of a `Deployment` must match its selector, so the API server rejects the resulting manifest with ``spec.template.metadata.labels: Invalid value: {"component":"web"}: `selector` does not match template `labels` `` (the selector should be patched too).
 
 In this example we'll add a new key/value `goal: CKAD` in `spec.template.metadata.labels`
 
@@ -9196,7 +9267,7 @@ In this example we'll add a new key/value `goal: CKAD` in `spec.template.metadat
 
   ```yaml
   patches:
-    - label-patch.yaml
+    - path: label-patch.yaml
   ```
 
   ```yaml
@@ -9229,7 +9300,7 @@ In this example we'll remove the `goal: CKAD` label set in `spec.template.metada
 
   ```yaml
   patches:
-    - label-patch.yaml
+    - path: label-patch.yaml
   ```
 
   ```yaml
@@ -9246,7 +9317,8 @@ In this example we'll remove the `goal: CKAD` label set in `spec.template.metada
 
 > [!TIP]
 >
-> To remove a field using a strategic merge patch, it can be set to `null`.
+> To remove a field using a strategic merge patch, it can be set to `null`.  
+> A JSON6902 `remove`, instead, requires the path to exist: otherwise the build fails with `Unable to remove nonexistent key`.
 
 Until now we have seen how to add, replace or remove keys to a dictionary; let's now see how to perform those operations on a list.
 
@@ -9268,11 +9340,11 @@ spec:
         component: nginx
     spec:
       containers:
-      - image: web
-        name: nginx
+      - image: nginx
+        name: web
 ```
 
-If we want to change the name and the image of the container
+If we want to replace the container, changing its name and its image
 
 - this is what we need using an inline JSON6902 patch
 
@@ -9289,11 +9361,11 @@ If we want to change the name and the image of the container
             image: haproxy
   ```
 
-- this is what we need using a multi-file strategic merge patch, using the following `kustomization.yaml`
+- with a multi-file strategic merge patch we can change only the image (see the note below), using the following `kustomization.yaml`
 
   ```yaml
   patches:
-    - image-patch.yaml
+    - path: image-patch.yaml
   ```
 
   and the following `image-patch.yaml`:
@@ -9313,7 +9385,8 @@ If we want to change the name and the image of the container
 
 > [!NOTE]
 >
-> The number at the end of `path: /spec/template/spec/containers/0` specifies the index of the object to manipulate.
+> The number at the end of `path: /spec/template/spec/containers/0` specifies the index of the object to manipulate.  
+> A strategic merge patch, instead, identifies the containers by their `name` (the merge key): it can change the image of the `web` container, but not its name, because a patch with a different name adds a new container to the list.
 
 If we want to add a second container to that list
 
@@ -9341,7 +9414,7 @@ If we want to add a second container to that list
 
   ```yaml
   patches:
-    - image-patch.yaml
+    - path: image-patch.yaml
   ```
 
   and the following `image-patch.yaml`:
@@ -9363,7 +9436,7 @@ If we want to add a second container to that list
   >
   > For `containers`, the `name` field is used as the merge key.  
   > If the patch contains a container whose `name` matches an existing container, that container is merged with the patch.  
-  > If no matching container exists, a new container is added.  
+  > If no matching container exists, a new container is added (Kustomize puts it at the beginning of the list).
   >
   > Since in this case no existing container has the name `web2`, the container is added rather than merged with an existing one.
 
@@ -9409,7 +9482,7 @@ we'll see how to delete the second container from that list.
 
   ```yaml
   patches:
-    - remove-container-patch.yaml
+    - path: remove-container-patch.yaml
   ```
 
   and the following `remove-container-patch.yaml`:
@@ -9489,6 +9562,7 @@ For example, in order to differentiate the nginx `Deployment` you can do as foll
     name: nginx-deployment
   spec:
     replicas: 1
+    # selector and template omitted for brevity
   ```
 
 - `overlays/dev/kustomization.yaml`
@@ -9603,7 +9677,7 @@ resources:
   - monitoring-config.yaml
 
 patches:
-  - monitoring-patch.yaml
+  - path: monitoring-patch.yaml
 ```
 
 The component can then be included by an overlay using the `components` field
@@ -9678,10 +9752,10 @@ resources:
 secretGenerator:
   - name: postgres-cred
     literals:
-      - password: postgres123
+      - password=postgres123
 
 patches:
-  - deployment-patch.yaml
+  - path: deployment-patch.yaml
 ```
 
 > [!NOTE]
@@ -9706,6 +9780,7 @@ patches:
 >                   key: password
 > ```
 >
+> The `secretGenerator` adds a hash of the content to the name of the generated `Secret` (for example `postgres-cred-2k8b68cdbb`), and Kustomize updates the references to it, like the `secretKeyRef` above.  
 > This is only an example. In a real-world environment, passwords and other sensitive values should not be stored directly in the kustomization files.
 
 The `caching` Component could instead contain the resources and configuration required to enable caching:
@@ -9718,7 +9793,7 @@ resources:
   - redis-deploy.yaml
 
 patches:
-  - deployment-patch.yaml
+  - path: deployment-patch.yaml
 ```
 
 The Components can then be included by the appropriate overlays:
@@ -9770,13 +9845,13 @@ This makes the configuration easier to maintain and scale as the number of envir
 
 Here is a comparison of bases, overlays and components.
 
-| Aspect              | Base                 | Overlay                            | Component                         |
-| ------------------- | -------------------- | ---------------------------------- | --------------------------------- |
-| Purpose             | Shared configuration | Environment-specific customization | Reusable optional functionality   |
-| Reusable            | Yes                  | Usually not                        | **Yes, across multiple overlays** |
-| Contains resources  | Yes                  | Yes                                | Yes                               |
-| Can contain patches | Yes                  | Yes                                | Yes                               |
-| Included using      | `resources`          | `resources`                        | `components`                      |
+| Aspect              | Base                 | Overlay                                            | Component                         |
+| ------------------- | -------------------- | -------------------------------------------------- | --------------------------------- |
+| Purpose             | Shared configuration | Environment-specific customization                 | Reusable optional functionality   |
+| Reusable            | Yes                  | Usually not                                        | **Yes, across multiple overlays** |
+| Contains resources  | Yes                  | Yes                                                | Yes                               |
+| Can contain patches | Yes                  | Yes                                                | Yes                               |
+| Included using      | `resources`          | built directly (`kubectl apply -k overlays/<env>`) | `components`                      |
 
 ---
 
@@ -9812,12 +9887,15 @@ whereas Helm is a little bit more complex but carries extra features as well (li
 ## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
 
 Currently, the CKAD exam consists of 15–20 performance-based tasks.  
-Candidates have 2 hours to complete the exam.
+Candidates have 2 hours to complete the exam.  
+The exam environment uses a recent Kubernetes version (v1.37 at the time of writing), aligned with each new minor release within about 4–8 weeks.
 
-You are allowed to consult the official Kubernetes documentation and the other resources explicitly permitted during the exam.
+You are allowed to consult only the resources explicitly permitted during the exam: the Kubernetes documentation (`kubernetes.io/docs`), the Kubernetes blog (`kubernetes.io/blog`) and, for the CKAD, the Helm documentation (`helm.sh/docs`).
 
-You will be provided with a notepad within the exam browser.  
-Make use of it; for example, you can note the numbers of the questions that you want to come back to later and their weight.
+The registration includes two attempts to pass the exam within 12 months (so you also have a retake) and two sessions of the killer.sh exam simulator, each one with 36 hours of access.
+
+The exam runs in a remote desktop with a terminal, a browser for the allowed documentation and the VSCodium editor.  
+You can also use the editor to take notes; for example, you can note the numbers of the questions that you want to come back to later and their weight.
 
 All questions have their weight displayed.  
 Some questions may take significantly longer to solve than others, regardless of their weight. If you get stuck on a question, it is usually better to move on and come back to it later.  
@@ -9825,9 +9903,10 @@ The questions in the exam can vary in difficulty, and you need to obtain at leas
 It is therefore important to manage your time effectively.  
 You can answer the questions in any order you like.
 
-Read the instructions given before the start of the exam carefully, especially those explaining how to copy and paste content from the Kubernetes documentation into the shell.  
-Before working on a question, always switch to the Kubernetes context specified in the question. Do not assume that the context from the previous question is still the correct one.  
-Sometimes you may need to SSH into another node or switch to the root user. Always be aware of which node, user, directory and Kubernetes context you are currently working with.  
+Read the instructions given before the start of the exam carefully, especially those explaining how to copy and paste content from the Kubernetes documentation into the shell (in the terminal, use Ctrl+Shift+C and Ctrl+Shift+V).  
+Before working on a question, always connect to the host (`ssh <host>`) or switch to the Kubernetes context specified in the question. Do not assume that the host or the context from the previous question is still the correct one.  
+At the end of a task, go back to the base host with `exit` (nested SSH sessions are not supported), and use `sudo -i` when you need to work as root. Always be aware of which node, user, directory and Kubernetes context you are currently working with.  
+On the hosts, `kubectl` is already configured with the `k` alias and Bash autocompletion, and tools like `yq`, `curl` and `wget` are available.  
 Proctors can be very strict about exam rules and the code of conduct.
 
 Other suggestions for the exam:
@@ -9835,6 +9914,7 @@ Other suggestions for the exam:
 - become fast and confident with both imperative commands and declarative syntax;
 - use resources such as [CKAD-resources](https://github.com/lucassha/CKAD-resources) and [CKAD-exercises](https://github.com/dgkanatsios/CKAD-exercises) to practice extensively before the exam;
 - do not waste time writing manifests from scratch; use `kubectl create ... --dry-run=client -o yaml` whenever possible, then edit the generated manifest;
+- use `kubectl explain <resource>.<field>` to look up the fields of a resource directly from the terminal;
 - practice performing tasks under time pressure, not just solving them correctly;
 - if you are stuck on a question, move on and come back later; it is usually better to complete several easier questions than to spend too much time on a single difficult one;
 - always verify the result of your changes before moving on to the next question.
