@@ -8417,6 +8417,10 @@ helm install release-3 bitnami/wordpress
 
 In the case above, we have three releases of the same chart.
 
+> [!NOTE]
+>
+> A chart is the package; a release is a deployed instance of that chart.
+
 To list the installed releases, run the `helm list` command
 
 ```console
@@ -8430,7 +8434,6 @@ release-3       default         1               2026-08-24 10:52:21.933218456 +0
 > [!NOTE]
 >
 > Chart version and app version are different concepts: the chart version (`30.0.9` in `wordpress-30.0.9`) is the version of the package, while the app version (`6.9.4`) is the version of the application it installs.  
-> A chart is the package; a release is a deployed instance of that chart.
 
 To uninstall a release, run the `helm uninstall` command
 
@@ -8454,7 +8457,7 @@ helm install release-4 ./wordpress
 ```
 
 Helm maintains a Release associated with each installation; then, each `helm upgrade` creates a new revision, and you can roll back to a specific revision with the `helm rollback` command.  
-Every install, upgrade or rollback increases the revision number by 1: a rollback does not delete the following revisions, but creates a new one with the configuration of the chosen revision.
+Every install, upgrade or rollback increases the revision number by 1: a rollback does not delete revisions, but creates a new one with the configuration of the chosen revision.
 
 ```text
 Chart + Values
