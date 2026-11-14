@@ -8875,7 +8875,9 @@ Here are some examples of the default transformers:
 
 > [!NOTE]
 >
-> By default, `labels` only adds the labels to the `metadata` of the resources: with `includeTemplates: true` it adds them also to the Pod templates, and with `includeSelectors: true` also to the selectors (like `commonLabels`).  
+> By default, `labels` only adds the labels to the `metadata` of the resources;  
+> with `includeTemplates: true` it adds them also to the Pod templates,  
+> and with `includeSelectors: true` also to the selectors (like `commonLabels`).  
 > This is useful for keeping labels and selectors consistent, but it should be used carefully because changing selectors can affect how resources identify their Pods.  
 > Moreover, the `spec.selector` of a `Deployment` is immutable: changing a label included in the selectors of a `Deployment` that is already deployed makes `kubectl apply` fail with `spec.selector: Invalid value: ...: field is immutable`.
 
