@@ -1,6 +1,45 @@
 # CKAD Certification
 
-## Architecture
+## Introduction: the CKAD exam
+
+Currently, the CKAD (Certified Kubernetes Application Developer) exam consists of 15–20 performance-based tasks.  
+Candidates have 2 hours to complete the exam.  
+The exam environment uses a recent Kubernetes version (v1.37 at the time of writing), aligned with each new minor release within about 4–8 weeks.
+
+You are allowed to consult only the resources explicitly permitted during the exam: the Kubernetes documentation (`kubernetes.io/docs`), the Kubernetes blog (`kubernetes.io/blog`) and, for the CKAD, the Helm documentation (`helm.sh/docs`).
+
+The registration includes two attempts to pass the exam within 12 months (so you also have a retake) and two sessions of the killer.sh exam simulator, each one with 36 hours of access.
+
+The exam runs in a remote desktop with a terminal, a browser for the allowed documentation and the VSCodium editor.  
+You can also use the editor to take notes; for example, you can note the numbers of the questions that you want to come back to later and their weight.
+
+All questions have their weight displayed.  
+Some questions may take significantly longer to solve than others, regardless of their weight. If you get stuck on a question, it is usually better to move on and come back to it later.  
+The questions in the exam can vary in difficulty, and you need to obtain at least 66% to pass.  
+It is therefore important to manage your time effectively.  
+You can answer the questions in any order you like.
+
+Read the instructions given before the start of the exam carefully, especially those explaining how to copy and paste content from the Kubernetes documentation into the shell (in the terminal, use Ctrl+Shift+C and Ctrl+Shift+V).  
+Before working on a question, always connect to the host (`ssh <host>`) or switch to the Kubernetes context specified in the question. Do not assume that the host or the context from the previous question is still the correct one.  
+At the end of a task, go back to the base host with `exit` (nested SSH sessions are not supported), and use `sudo -i` when you need to work as root. Always be aware of which node, user, directory and Kubernetes context you are currently working with.  
+On the hosts, `kubectl` is already configured with the `k` alias and Bash autocompletion, and tools like `yq`, `curl` and `wget` are available.  
+Proctors can be very strict about exam rules and the code of conduct.
+
+Other suggestions for the exam:
+
+- become fast and confident with both imperative commands and declarative syntax;
+- use resources such as [CKAD-resources](https://github.com/lucassha/CKAD-resources) and [CKAD-exercises](https://github.com/dgkanatsios/CKAD-exercises) to practice extensively before the exam;
+- do not waste time writing manifests from scratch; use `kubectl create ... --dry-run=client -o yaml` whenever possible, then edit the generated manifest;
+- use `kubectl explain <resource>.<field>` to look up the fields of a resource directly from the terminal;
+- practice performing tasks under time pressure, not just solving them correctly;
+- if you are stuck on a question, move on and come back later; it is usually better to complete several easier questions than to spend too much time on a single difficult one;
+- always verify the result of your changes before moving on to the next question.
+
+---
+
+## Part 1 – Kubernetes fundamentals
+
+### 1.1 Architecture
 
 A Node is a machine (physical or virtual) and can be:
 
@@ -79,7 +118,571 @@ The configuration file of a Kubernetes object (an instance of a given `Kind`) is
 
 ---
 
-## Pods
+### 1.2 The Kubernetes API: groups, resources and verbs
+
+Whatever operation we perform on the cluster, we interact with the Kubernetes API Server, either through the `kubectl` utility or directly through its REST API. For example:
+
+- for checking the version we can use `curl https://kube-master:6443/version`;
+- for many operations, we use the path `/api`, for example `curl https://kube-master:6443/api/v1/pods`;
+- for many other operations, we need to use the path `/apis`, for example `curl https://kube-master:6443/apis/apps/v1/deployments`.
+
+The Kubernetes API is organized into API groups, which provide a way to logically group related resources and make the API easier to extend.  
+API groups are accessible via API paths in the following way:
+
+- `/api`: the API path for the core API group `/api/v1`, which contains resources such as `Pods`, `Services`, `Nodes`, `Namespaces`, `ConfigMaps`, `Secrets`, `PersistentVolumes` and `PersistentVolumeClaims`;
+- `/apis`: the API path that contains named API groups, which organize related resources. It has groups like:
+  - `/apps/v1`: `Deployments`, `ReplicaSets`, `StatefulSets`;
+  - `/batch/v1`: `Jobs`, `CronJobs`;
+  - `/networking.k8s.io/v1`: `NetworkPolicies`, `Ingress`;
+  - `/storage.k8s.io/v1`: `StorageClasses`;
+  - `/authentication.k8s.io/v1`: authentication-related APIs;
+  - `/authorization.k8s.io/v1`: authorization checks like `SubjectAccessReviews` (used by `kubectl auth can-i`);
+  - `/rbac.authorization.k8s.io/v1`: `Roles`, `RoleBindings`, `ClusterRoles`, `ClusterRoleBindings`;
+  - `/certificates.k8s.io/v1`: `CertificateSigningRequests`;
+- Other API server endpoints (that are neither API groups nor part of one), representing `nonResourceURLs` like:
+  - `/version`: to view the version of the cluster;
+  - `/livez` and `/readyz`: to monitor the health of the API server (`/healthz` is deprecated since v1.16);
+  - `/metrics`: to retrieve metrics on the cluster;
+  - `/logs`: to provide access to log files exposed by the API server (deprecated, and disabled by default since v1.31).
+
+> [!CAUTION]
+>
+> Not every endpoint exposed by the API server represents a Kubernetes API group.  
+> For example, `/version`, `/metrics` and `/livez` are non-resource endpoints.
+
+The resources are exposed through `/api` and `/apis` API paths.
+
+| Component                          | URI                                                         |
+| ---------------------------------- | ----------------------------------------------------------- |
+| Core API group                     | `/api/<version>/<resource>`                                 |
+| Named API groups                   | `/apis/<group>/<version>/<resource>`                        |
+| Namespaced resources, core group   | `/api/<version>/namespaces/<namespace>/<resource>`          |
+| Namespaced resources, named groups | `/apis/<group>/<version>/namespaces/<namespace>/<resource>` |
+| Other endpoints                    | `/<endpoint>`                                               |
+
+For example, `/api/v1/pods` lists the Pods of all the namespaces, `/api/v1/namespaces/default/pods/nginx` is the Pod `nginx` of the `default` namespace and `/apis/apps/v1/namespaces/default/deployments` lists the Deployments of the `default` namespace.  
+In order to perform operations (like Ccreate, Patch, Replace, Delete) on a namespaced resource, the namespaced URI should always be provided.
+
+> [!NOTE]
+>
+> Keep in mind that **resource** and **kind** are not the same thing. For example:
+>
+> ```text
+> Resource: deployments
+> Kind:     Deployment
+> ```
+>
+> the command `kubectl api-resources` highlights this difference
+>
+> ```console
+> $ kubectl api-resources
+> NAME           SHORTNAMES   APIVERSION              NAMESPACED   KIND
+> pods           po           v1                      true         Pod
+> services       svc          v1                      true         Service
+> deployments    deploy       apps/v1                 true         Deployment
+> statefulsets   sts          apps/v1                 true         StatefulSet
+> jobs                        batch/v1                true         Job
+> cronjobs       cj           batch/v1                true         CronJob
+> ingresses      ing          networking.k8s.io/v1    true         Ingress
+> nodes          no           v1                      false        Node
+> ```
+
+| Kind                  | Resource               | API group         | API version | API path                                     |
+| --------------------- | ---------------------- | ----------------- | ----------- | -------------------------------------------- |
+| Pod                   | pods                   | core              | v1          | `/api/v1/pods`                               |
+| Service               | services               | core              | v1          | `/api/v1/services`                           |
+| Deployment            | deployments            | apps              | v1          | `/apis/apps/v1/deployments`                  |
+| StatefulSet           | statefulsets           | apps              | v1          | `/apis/apps/v1/statefulsets`                 |
+| NetworkPolicy         | networkpolicies        | networking.k8s.io | v1          | `/apis/networking.k8s.io/v1/networkpolicies` |
+| PersistentVolumeClaim | persistentvolumeclaims | core              | v1          | `/api/v1/persistentvolumeclaims`             |
+| StorageClass          | storageclasses         | storage.k8s.io    | v1          | `/apis/storage.k8s.io/v1/storageclasses`     |
+
+```text
+Kubernetes API Server
+│
+├── API discovery / resource APIs
+│   ├── /api/v1
+│   │        ├── pods
+│   │        ├── services
+│   │        ├── namespaces
+│   │        ├── configmaps
+│   │        ├── secrets
+│   │        ├── nodes
+│   │        └── ...
+│   │
+│   └── /apis
+│       ├── /apps/v1
+│       ├── /batch/v1
+│       ├── /networking.k8s.io/v1
+│       ├── /storage.k8s.io/v1
+│       ├── /authentication.k8s.io/v1
+│       ├── /certificates.k8s.io/v1
+│       └── ...
+│
+└── Other API server endpoints (nonResourceURLs)
+    ├── /version
+    ├── /livez
+    ├── /readyz
+    ├── /metrics
+    └── ...
+```
+
+You can discover the available API groups through the API Server itself, with the commands:
+
+- `curl https://localhost:6443 -k --key admin.key --cert admin.crt`;
+- `curl https://localhost:6443/api -k --key admin.key --cert admin.crt`;
+- `curl https://localhost:6443/apis -k --key admin.key --cert admin.crt`;
+
+and if you want to check a specific API, you can perform `curl https://localhost:6443/apis/apps/v1 -k --key admin.key --cert admin.crt`.
+
+> [!IMPORTANT]
+>
+> Without credentials, the request is anonymous (user `system:anonymous`): in a cluster with RBAC only `/version`, `/healthz`, `/livez` and `/readyz` are allowed, while `/api`, `/apis` and the resources return `403 Forbidden`.
+
+In order to avoid specifying authentication parameters, you can start a local proxy with the command
+
+```bash
+kubectl proxy
+```
+
+and then perform commands like:
+
+- `curl http://localhost:8001`;
+- `curl http://localhost:8001/api`;
+- `curl http://localhost:8001/apis`.
+
+and you can finally get specific information on a single API with a command like `curl http://localhost:8001/apis/apps/v1`.
+
+> [!TIP]
+>
+> `kubectl proxy` starts a local proxy that forwards requests to the Kubernetes API server.  
+> By default, it listens on `127.0.0.1:8001` and uses the current kubeconfig context to determine how to connect to the API server.  
+> Using this proxy, we don't have to specify credentials and certificates in each curl command.
+>
+> Without a proxy, `kubectl get --raw <path>` (for example `kubectl get --raw /apis/apps/v1`) sends a request to any API path with the credentials of the kubeconfig.
+
+The API group and version are also reflected in the `apiVersion` field of Kubernetes objects:
+
+- Core API group, uses `apiVersion: v1`
+
+  ```yaml
+  apiVersion: v1
+  kind: Pod
+  ```
+
+- Named API group, uses `apiVersion: <group>/<version>`
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: Deployment
+  ```
+
+> [!CAUTION]
+>
+> The API group and API version are separate concepts.  
+> For example, `apps/v1` refers to the `apps` API group and its `v1` version.  
+> For resources in the core API group, the group name is omitted and only the version is specified, such as `v1`.
+
+Each resource supports a set of operations, commonly referred to as Kubernetes verbs, such as `get`, `list`, `create`, `update`, `patch`, `delete`, `deletecollection` and `watch`.
+
+> [!NOTE]
+>
+> Kubernetes verbs should not be confused with HTTP methods.  
+> For example:
+>
+> - `kubectl get pods` uses the Kubernetes `list` verb (it reads a collection), implemented through an HTTP `GET` request, while `kubectl get pod nginx` uses the `get` verb;
+> - `kubectl create deployment ...` uses the Kubernetes `create` verb and is implemented using an HTTP `POST` request;
+> - `watch` is implemented using an HTTP `GET` request with the `?watch=true` parameter.
+>
+> | HTTP method   | Kubernetes verb                                                            |
+> | ------------- | -------------------------------------------------------------------------- |
+> | `POST`        | `create`                                                                   |
+> | `GET`, `HEAD` | `get` (single resource), `list` (collection), `watch` (with `?watch=true`) |
+> | `PUT`         | `update`                                                                   |
+> | `PATCH`       | `patch`                                                                    |
+> | `DELETE`      | `delete` (single resource), `deletecollection` (collection)                |
+>
+> This matters for RBAC: a user allowed only to `get` Pods can run `kubectl get pod nginx`, but `kubectl get pods` fails with `cannot list resource "pods"`.
+
+To summarize:
+
+- the Kubernetes API Server exposes Kubernetes resources through API groups;
+- at the top level we have a core API group (exposed through `/api`) and named API groups (exposed through `/apis`);
+- under the named API groups we have one API group for each API section;
+- each API group can have one or more API versions;
+- each API version exposes one or more resources;
+- resources support operations (Kubernetes verbs) such as `get`, `list`, `create`, `update`, `patch`, `delete` and `watch`.
+
+```text
+                Kubernetes API Server
+                        │
+        ┌───────────────┴───────────────┐
+        │                               │
+    Core API group                Named API groups
+      /api                           /apis
+        │                               │
+        v1                     ┌────────┼────────────────┐
+        │                      │        │                │
+┌───────┼────────┐           apps     batch     networking.k8s.io
+│       │        │             │        │                │
+pods  services  configmaps    v1       v1               v1
+                               │
+                         deployments
+                               │
+                         Kubernetes verbs
+                   ┌───────────┼───────────┐
+                 get        create       delete
+```
+
+```text
+API group
+    │
+    └── API version
+            │
+            └── Resource
+                    │
+                    └── Operations / verbs
+```
+
+Useful commands:
+
+- `kubectl api-versions`: show the available API groups and versions, in the form `<group>/<version>`;
+- `kubectl api-resources`: show available resources and the corresponding API group (especially useful when you can't find a resource on the documentation pages); `-o wide` also shows the verbs supported by each resource, `--api-group=<group>` and `--namespaced=true|false` filter the list;
+- `kubectl explain <resource name>`: gives details on the Kind and lists the top level fields and their type;
+- `kubectl explain <resource name>.<field name>`: gives details on the Kind and lists the subfields and their type;
+- `kubectl explain <resource name> --recursive`: lists all fields that we would put in the YAML file;
+- `kubectl get --raw <API path>`: sends a GET request to any API path, using the credentials of the kubeconfig.
+
+---
+
+### 1.3 Namespaces
+
+The `Namespace` is the logical segmentation of Kubernetes clusters.  
+Many kinds (like `Pod`) only exist inside a namespace and in this case we say that the resource is **namespaced**; other resources, called **cluster-scoped**, do not belong to any namespace and are visible from the whole cluster (like Nodes, PersistentVolumes and namespaces themselves).  
+You can list the namespaced resource types with `kubectl api-resources --namespaced=true` and the cluster-scoped ones with `kubectl api-resources --namespaced=false`.  
+Each namespace can have its own set of policies defining who can do what, their quotas (number of CPUs, GB of RAM), limits, etc.
+
+When a Kubernetes cluster is created, it creates:
+
+- the default namespace, named `default`, used when no namespace is specified;
+- a system namespace named `kube-system`, in which the Pods and Services needed to run the cluster itself are created (e.g. CoreDNS and kube-proxy), keeping them separate from the user's workloads to reduce the risk of modifying or deleting them by mistake (the namespace alone does not prevent it: access is controlled with RBAC);
+- a third, automatically created namspace named `kube-public`, which is readable by all users, including unauthenticated users in many cluster configurations (this namespace is a good place to put resources that should be available to all users);
+- a fourth namespace, `kube-node-lease`, which holds the Lease objects used for node heartbeats, helping the control plane detect node failures more efficiently.
+
+The `Namespace` can also be specified in the `metadata.namespace` field of the manifest of any namespaced resource.  
+There is also an option to show the resources in all namespaces, which is `--all-namespaces` and the shorthand is `-A`.
+
+> [!TIP]
+>
+> In these notes, "the default namespace" means the current namespace of your kubectl context, which is `default` unless you change it.  
+> You can change it (to avoid typing `-n <namespace-name>` every time) with:
+>
+> ```bash
+> kubectl config set-context --current --namespace=dev
+> ```
+
+Useful commands:
+
+- `kubectl create namespace dev`: creates a namespace named `dev`;
+- `kubectl get pod`: retrieves all the Pods in the default namespace;
+- `kubectl get pod --all-namespaces`: retrieves all the Pods in all the namespaces;
+
+---
+
+### 1.4 Working with kubectl
+
+#### KubeConfig and contexts
+
+When communicating with a Kubernetes cluster, authentication and connection parameters may need to be provided to both `kubectl` and `curl`.  
+For example:
+
+```bash
+curl https://my-kube-playground:6443/api/v1/pods \
+  --key admin.key \
+  --cert admin.crt \
+  --cacert ca.crt
+```
+
+```bash
+kubectl get pods \
+  --server https://my-kube-playground:6443 \
+  --client-key admin.key \
+  --client-certificate admin.crt \
+  --certificate-authority ca.crt
+```
+
+In order to avoid typing all those each time, we can move this information to a configuration file called `kubeconfig` and specify only this one with the `--kubeconfig` option in the command.
+
+```bash
+kubectl get pods \
+  --kubeconfig config
+```
+
+By default, the `kubectl` tool looks for the file `~/.kube/config`.  
+So, if the file is placed there, we don't have to specify the path to that file each time.  
+This default can be overridden by setting the `KUBECONFIG` environment variable, which specifies the kubeconfig file(s) to use (with more files, separated by `:` on Linux, `kubectl` merges them).
+
+```bash
+kubectl get pods
+```
+
+That's the reason we didn't have to specify any options for our `kubectl` commands so far.
+
+A kubeconfig file has a specific structure and mainly contains three collections:
+
+- **Clusters**: the Kubernetes clusters that we need access to (for example, different environments, organizations or cloud providers);
+- **Users**: the identities or credentials used to authenticate to those clusters;
+- **Contexts**: define which user accesses which cluster and, optionally, which namespace is used by default.
+
+Using a kubeconfig compared to using the parameters in the commands performed above:
+
+- the server specification (`--server` or URL on curl) and CA certificate (`--certificate-authority` or `--cacert` on curl) go in the cluster section;
+- the user's keys (`--client-key` or `--key` on curl) and certificates (`--client-certificate` or `--cert` on curl) go into the user section;
+- combining them together, as you would when running a command, corresponds to the context.
+
+```text
+Cluster
+  └── server + CA
+
+User
+  └── client certificate + client key
+
+Context
+  └── Cluster + User + Namespace
+```
+
+Here is an example of a real kubeconfig file (the base64 values are shortened):
+
+```yaml
+apiVersion: v1
+kind: Config
+
+clusters:
+- name: development
+  cluster:
+    server: https://development.example.com:6443
+    certificate-authority: /etc/kubernetes/pki/development/ca.crt
+- name: my-kube-playground
+  cluster:
+    server: https://my-kube-playground.example.com:6443
+    certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUIwekNDQVhTZ0F3SUJBZ0lSQU5DNE5qczJiWG8w
+- name: production
+  cluster:
+    server: https://production.example.com:6443
+    certificate-authority: /etc/kubernetes/pki/production/ca.crt
+- name: google
+  cluster:
+    server: https://google.example.com:6443
+    certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURCVENDQWUyZ0F3SUJBZ0lJ
+
+users:
+- name: admin
+  user:
+    client-certificate: admin.crt
+    client-key: admin.key
+- name: my-kube-admin
+  user:
+    token: <token>
+- name: dev-user
+  user:
+    token: <token>
+- name: prod-user
+  user:
+    token: <token>
+
+contexts:
+- name: admin@production
+  context:
+    cluster: production
+    user: admin
+- name: my-kube-admin@my-kube-playground
+  context:
+    cluster: my-kube-playground
+    user: my-kube-admin
+- name: dev@google
+  context:
+    cluster: google
+    user: dev-user
+    namespace: invoicing
+
+current-context: admin@production
+```
+
+> [!NOTE]
+>
+> The CA of the destination server can be specified:
+>
+> - as a path to a certificate file, with the `certificate-authority` field;
+> - directly in the kubeconfig as a base64-encoded value, with the `certificate-authority-data` field.
+>
+> The same applies to the client certificate and key of a user (`client-certificate`/`client-certificate-data` and `client-key`/`client-key-data`).  
+> The `-data` fields must contain valid base64: otherwise every `kubectl` command fails with `error loading config file ... illegal base64 data`.
+
+![kubeconfig: clusters, context and users](./images/01-kubeconfig-clusters-context-users.png "kubeconfig contents")
+
+```mermaid
+flowchart LR
+
+subgraph C["Clusters"]
+    C1["Development"]
+    C2["MyKubePlayground"]
+    C3["Production"]
+    C4["Google"]
+end
+
+subgraph CT["Contexts"]
+    CT1["Admin@Production"]
+    CT2["MyKubeAdmin@MyKubePlayground"]
+    CT3["Dev@Google"]
+end
+
+subgraph U["Users"]
+    U1["Admin"]
+    U2["MyKubeAdmin"]
+    U3["Dev User"]
+    U4["Prod User"]
+end
+
+CT1 -->|cluster| C3
+CT1 -->|user| U1
+
+CT2 -->|cluster| C2
+CT2 -->|user| U2
+
+CT3 -->|cluster| C4
+CT3 -->|user| U3
+
+K["current-context"] --> CT1
+```
+
+```text
+Clusters                  Contexts                           Users
+
+Development
+
+MyKubePlayground ◄──────── MyKubeAdmin@MyKubePlayground ───► MyKubeAdmin
+
+Production ◄────────────── Admin@Production ───────────────► Admin
+
+Google ◄────────────────── Dev@Google ─────────────────────► Dev User
+
+                                                             Prod User
+```
+
+Note that a cluster or a user can also be defined without being used by any context (like `development` and `prod-user`).
+
+As you can notice, there is also a `current-context` field inside the kubeconfig.  
+It tells `kubectl` which context to use by default when no other context is explicitly specified.
+
+The `current-context` field is optional, but without it `kubectl` doesn't know which cluster to contact: `kubectl config current-context` returns `error: current-context is not set` and the other commands fall back to `localhost:8080`, unless a context is passed with `--context <context-name>`.
+
+Useful commands:
+
+- `kubectl config view`: view the configuration of the currently used kubeconfig file(s), merged, with the certificate data and the tokens hidden (`DATA+OMITTED`, `REDACTED`); `--raw` shows them and `--minify` shows only the current context;
+- `kubectl config view --kubeconfig=mycustom-config`: view the configuration of a specific kubeconfig file;
+- `kubectl config get-clusters`: list the clusters available;
+- `kubectl config get-users`: list the users available;
+- `kubectl config get-contexts`: list the contexts available;
+- `kubectl config current-context`: view the current context being used;
+- `kubectl config use-context <context-name>`: change the current context of the current kubeconfig file (it updates the `current-context` field of the file);
+- `kubectl config set-context --current --namespace=<namespace>`: change the default namespace of the current context.
+
+```console
+$ kubectl config get-contexts
+CURRENT   NAME                               CLUSTER              AUTHINFO        NAMESPACE
+*         admin@production                   production           admin
+          dev@google                         google               dev-user        invoicing
+          my-kube-admin@my-kube-playground   my-kube-playground   my-kube-admin
+
+$ kubectl config current-context
+admin@production
+
+$ kubectl config use-context dev@google
+Switched to context "dev@google".
+
+$ kubectl config current-context
+dev@google
+```
+
+#### Imperative commands and output formatting
+
+While you would be working mostly using the declarative commands (using definition files), imperative commands can help in getting one-time tasks done quickly, as well as generating a definition template easily.
+
+> [!TIP]
+>
+> This would help save a considerable amount of time during your exams.  
+
+Familiarize yourself with the two options that can come in handy while working with the below commands:
+
+- `--dry-run`: by default, as soon as the command is run, the resource will be created. If you simply want to test your command, use the `--dry-run=client` option: the resource is not created, kubectl only builds and validates the object locally, telling you if the command is right. With `--dry-run=server`, instead, the request is sent to the API server, which fully validates it (e.g. name conflicts, admission controllers, quotas) without persisting it, telling you whether the resource can actually be created. Recent kubectl versions require an explicit value, so always write `--dry-run=client` (or `--dry-run=server`), not just `--dry-run`;
+- `-o yaml`: this will output the resource definition in YAML format on the screen.
+
+Use the above two in combination along with Linux output redirection to generate a resource definition file quickly that you can then modify and create resources as required, instead of creating the files from scratch.
+
+Here are some examples
+
+| Command                                                      | Description                         | Dry-run command to generate YAML manifest (and optionally redirect it to a file)                              |
+| ------------------------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `kubectl run nginx --image=nginx`                            | Create an NGINX Pod                 | `kubectl run nginx --image=nginx --dry-run=client -o yaml > nginx-pod.yaml`                                   |
+| `kubectl create deployment nginx --image=nginx`              | Create a deployment                 | `kubectl create deployment nginx --image=nginx --dry-run=client -o yaml`                                      |
+| `kubectl create deployment nginx --image=nginx --replicas=4` | Create a deployment with 4 Replicas | `kubectl create deployment nginx --image=nginx --replicas=4 --dry-run=client -o yaml > nginx-deployment.yaml` |
+
+The following command generates the manifest of a `Service` named redis-service of type ClusterIP, which exposes the Pod redis on port 6379, via the `expose` command
+
+```bash
+kubectl expose pod redis --port=6379 --name redis-service --dry-run=client -o yaml
+```
+
+and this will automatically use the Pod's labels as selectors.  
+Or instead, you can do something similar via the service creation command
+
+```bash
+kubectl create service clusterip redis --tcp=6379:6379 --dry-run=client -o yaml
+```
+
+but this will not use the Pod labels as selectors; instead it will assume the selector `app=<service-name>` (here `app=redis`).  
+Considering that you cannot pass in selectors as an option, it does not work well if your Pod has a different label set: for example, Pods created with `kubectl run` are labeled `run=<pod-name>`, while the Pods of a Deployment created with `kubectl create deployment` are labeled `app=<deployment-name>`.  
+So with this second option, after having generated the file, you may need to modify the selectors before creating the service.
+
+To create a `Service` named nginx-service of type `NodePort` that exposes Pod nginx's port 80 as port 30080 on the nodes, using the `expose` command, you need the following command
+
+```bash
+kubectl expose pod nginx --port=80 --name nginx-service --type=NodePort --dry-run=client -o yaml
+```
+
+to generate the definition file.  
+This will automatically use the Pod's labels as selectors, but you cannot specify the `nodePort`: you then need to add the `nodePort` in the file manually before creating the service.  
+Or instead, you can do something similar via the service creation command
+
+```bash
+kubectl create service nodeport nginx --tcp=80:80 --node-port=30080 --dry-run=client -o yaml
+```
+
+But this will not use the Pod's labels as selectors (it assumes `app=nginx`) and you may still need to modify the manifest before applying it.
+
+Both the above commands have their own challenges.  
+While one of them cannot accept a selector, the other cannot accept a `nodePort`.  
+I would recommend going with the `kubectl expose` command and then manually adding the `nodePort` in the manifest file before creating the service.
+
+The default output format for all kubectl commands is the human-readable plain-text format.  
+The -o flag lets you output the details in several different formats.
+
+```bash
+kubectl [command] [TYPE] [NAME] -o <output_format>
+```
+
+Here are some of the commonly used formats:
+
+- `-o json`: output a JSON formatted API object;
+- `-o name`: print only the resource name and nothing else;
+- `-o wide`: output in the plain-text format with additional information;
+- `-o yaml`: output a YAML formatted API object.
+
+---
+
+## Part 2 – Pods
+
+### 2.1 Pods
 
 The structure of a Pod YAML manifest is the following
 
@@ -218,2580 +821,7 @@ Useful commands:
 
 ---
 
-## ReplicaSets
-
-This is the structure of a `ReplicaSet` YAML manifest
-
-```yaml
-apiVersion: apps/v1
-kind: ReplicaSet
-metadata:
-  name: frontend
-  labels:
-    app: guestbook
-    tier: frontend
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      tier: frontend
-  template:
-    metadata:
-      labels:
-        tier: frontend
-    spec:
-      containers:
-      - name: php-redis
-        image: us-docker.pkg.dev/google-samples/containers/gke/gb-frontend:v5
-```
-
-In the ReplicaSet, `.spec.template.metadata.labels` must match `.spec.selector`, or it will be rejected by the API.
-
-> [!TIP]
->
-> In the past, the `ReplicationController` (introduced in the initial Kubernetes v1.0 release in July 2015) was used instead of `ReplicaSet` (introduced later in Kubernetes v1.2 in March 2016).  
-> Today the `ReplicationController` is a legacy API, superseded by `ReplicaSet` (and `Deployment`). The main differences are:
->
-> - the `ReplicaSet` also supports set-based selectors (`matchExpressions` with operators like `In`, `NotIn`, `Exists`, `DoesNotExist`), while the `ReplicationController` supports only equality-based selectors (a plain `key: value` map under `selector`);
-> - in the `ReplicaSet` the field `selector` is mandatory, while in the `ReplicationController`, if omitted, it defaults to the labels of the Pod template (`.spec.template.metadata.labels`).
-
-There are three ways to scale a ReplicaSet:
-
-- `kubectl apply -f replicaset-definition.yaml`: modify the value of `replicas` inside the file manifest and then `apply` it;
-- `kubectl scale --replicas=6 -f replicaset-definition.yaml`: uses an existing manifest file (still required as input) but does not update its content;
-- `kubectl scale --replicas=6 replicaset frontend`: this is an imperative command that scales the already deployed ReplicaSet, without the need for a manifest file.
-
-There are also options to automatically scale the replicas based on the load, but we'll see them in another course.
-
-> [!WARNING]
->
-> Updating the Pod template of a `ReplicaSet` does not trigger an automatic rolling update.  
-> The updated Pod template is used only for newly created Pods.  
-> Existing Pods are not automatically replaced and continue running with their current configuration until they are deleted.  
-> Deployments should be preferred when controlled rolling updates or rollbacks are required.
-
-Useful commands:
-
-- `kubectl create -f replicaset-definition.yaml`: creates a `ReplicaSet` starting from the definition inside the YAML manifest;
-- `kubectl get replicaset <replicaset-name>`: retrieves the `ReplicaSet` in the default namespace;
-- `kubectl delete replicaset <replicaset-name>`: deletes a `ReplicaSet` and all of its pods;
-- `kubectl replace -f replicaset-definition.yaml`: replaces or updates a `ReplicaSet`;
-- `kubectl scale`: scales the replicas of a `ReplicaSet`.
-
----
-
-## Deployments
-
-The `Deployment` is "higher in hierarchy" compared to `ReplicaSet` (and `ReplicationController`).  
-If the RS is a controller of Pods, a `Deployment` manages one or more ReplicaSets, providing rollout and rollback capabilities.
-
-The structure of a `Deployment` YAML manifest is almost identical to the one of the `ReplicaSet`, except for the Kind.
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx-deployment
-  labels:
-    app: nginx
-spec:
-  replicas: 3
-  selector:
-    matchLabels:
-      app: nginx
-  template:
-    metadata:
-      labels:
-        app: nginx
-    spec:
-      containers:
-      - name: nginx
-        image: nginx:1.14.2
-        ports:
-        - containerPort: 80
-```
-
-At creation, the `Deployment` automatically generates a `ReplicaSet` as well (named after the `Deployment` plus a hash of the Pod template, e.g. `nginx-deployment-66b6c48dd5`), in addition to the `Deployment` object itself.
-
-> [!IMPORTANT]
->
-> Remember that you cannot edit specifications of an existing `Pod` other than:
->
-> - `spec.containers[*].image`
-> - `spec.initContainers[*].image`
-> - `spec.activeDeadlineSeconds`
-> - `spec.tolerations` (only additions to the existing ones)
->
-> If you really need to, you can instead recreate the Pod with `kubectl replace --force -f <file-name>`.  
-> Useful trick: if you change a forbidden field with `kubectl edit pod <pod-name>`, the edit is rejected, but kubectl saves your modified manifest to a temporary file (e.g. `/tmp/kubectl-edit-xxxxx.yaml`), which you can use directly with `kubectl replace --force -f /tmp/kubectl-edit-xxxxx.yaml`.
->
-> With `Deployments`, instead, you can easily edit any field / property of the Pod template.  
-> Since the Pod template is a child of the `Deployment` specification, with every change to the Pod template, the Deployment automatically creates the necessary new Pods (via a new `ReplicaSet`) to replace the old ones.  
-> So if you need to edit a property of a `Pod` that is part of a `Deployment`, you may do that simply by running the command `kubectl edit deployment <deployment-name>`.
-
-Useful commands:
-
-- `kubectl scale deployment nginx --replicas=4`: scale a `Deployment` using the kubectl scale command;
-- `kubectl create deployment <deployment-name> --image=<image>`: create a `Deployment`;
-- `kubectl get deployment <deployment-name>`: retrieves a `Deployment` based on its name;
-- `kubectl get deployments`: retrieves all deployments from the default namespace;
-- `kubectl edit deployment <deployment-name>`: edit a property of a `Deployment`.
-
----
-
-## Namespaces
-
-The `Namespace` is the logical segmentation of Kubernetes clusters.  
-Many kinds (like `Pod`) only exist inside a namespace and in this case we say that the resource is **namespaced**; other resources, called **cluster-scoped**, do not belong to any namespace and are visible from the whole cluster (like Nodes, PersistentVolumes and namespaces themselves).  
-You can list the namespaced resource types with `kubectl api-resources --namespaced=true` and the cluster-scoped ones with `kubectl api-resources --namespaced=false`.  
-Each namespace can have its own set of policies defining who can do what, their quotas (number of CPUs, GB of RAM), limits, etc.
-
-When a Kubernetes cluster is created, it creates:
-
-- the default namespace, named `default`, used when no namespace is specified;
-- a system namespace named `kube-system`, in which the Pods and Services needed to run the cluster itself are created (e.g. CoreDNS and kube-proxy), keeping them separate from the user's workloads to reduce the risk of modifying or deleting them by mistake (the namespace alone does not prevent it: access is controlled with RBAC);
-- a third, automatically created namspace named `kube-public`, which is readable by all users, including unauthenticated users in many cluster configurations (this namespace is a good place to put resources that should be available to all users);
-- a fourth namespace, `kube-node-lease`, which holds the Lease objects used for node heartbeats, helping the control plane detect node failures more efficiently.
-
-Inside the same namespace, a Pod can reach a `Service` simply using the Service name (as if they were people living inside the same house). In this way, for example, the `Pod` named `webapp` can reach the `Service` named `db-service` which resides in the same `Namespace` simply using its name, like for example with `mysql.connect("db-service")`.  
-Instead, if an application wants to reach a Service in another namespace of the same cluster, it must also specify the namespace: `<service>.<namespace>` is enough, while the fully qualified domain name (FQDN) is `<service>.<namespace>.svc.cluster.local`. For example, to reach a mysql db through the service `db-service` in the namespace `dev`, the application can use `mysql.connect("db-service.dev")` or `mysql.connect("db-service.dev.svc.cluster.local")`.  
-This happens because:
-
-- when a service is created, a DNS entry is automatically added (by the cluster DNS, typically CoreDNS);
-- `cluster.local` is the default domain of a Kubernetes cluster;
-- `svc` stands for `Service`;
-- the `/etc/resolv.conf` file of every Pod contains search domains (like `svc.cluster.local`) that complete the short names.
-
-The `Namespace` can also be specified inside the `metadata` section (`metadata.namespace` field) of the various manifest files described above.  
-There is also an option to show the resources in all namespaces, which is `--all-namespaces` and the shorthand is `-A`.
-
-> [!TIP]
->
-> In these notes, "the default namespace" means the current namespace of your kubectl context, which is `default` unless you change it.  
-> You can change it (to avoid typing `-n <namespace-name>` every time) with:
->
-> ```bash
-> kubectl config set-context --current --namespace=dev
-> ```
-
-Useful commands:
-
-- `kubectl create namespace dev`: creates a namespace named `dev`;
-- `kubectl get pod`: retrieves all the Pods in the default namespace;
-- `kubectl get pod --all-namespaces`: retrieves all the Pods in all the namespaces;
-- `kubectl get service -A`: retrieves all the services in all the namespaces;
-- `kubectl get service -n <namespace-name>`: retrieves all the services in a specific namespace.
-
----
-
-## Services
-
-Services are Kubernetes objects that allow communication between the workloads and with external entities.  
-Services allow loose coupling by abstracting away the IP addresses of the workloads (Pod IPs change every time a Pod is recreated).
-
-> [!NOTE]
->
-> A `Service` can select Pods running on different nodes, but Kubernetes does not create one Service per node.
->
-> A `Service` is **NOT** replicated across multiple nodes but is a namespaced Kubernetes object.
->
-> Instead, Kubernetes keeps track of the IP addresses of all the Pods matching the `Service`, regardless of the node where they run, in `EndpointSlice` objects (and in the legacy `Endpoints` object, see below).
->
-> Networking components such as kube-proxy (or eBPF-based implementations like Cilium) use them to configure the forwarding rules on the cluster nodes.
-
-There are mainly 3 types of services:
-
-- `ClusterIP`: creates a virtual IP inside the cluster to enable communication between services. It stays inside the Kubernetes network;
-- `NodePort`: exposes a specific port on every node and forwards incoming requests to the selected Pods;
-- `LoadBalancer`: provisions a load balancer in supported cloud providers (to distribute the load). It is normally used for exposing the Pods on public networks.
-
-There is also a fourth type, `ExternalName`, which maps the `Service` to an external DNS name (e.g. `my.database.example.com`) through a DNS `CNAME` record, without selectors or proxying.
-
-Most Services are assigned a virtual IP address called ClusterIP; Headless Services (created with `clusterIP: None`) and `ExternalName` Services are the exceptions.
-
-In Services, the `selector` defines which Pods the Service targets.  
-To link a `Service` with the Pods, the Pods must have **all** the labels listed in the `selector` of the Service (they can also have other labels).  
-A `Service` exposes, through the correct use of the selectors:
-
-- a single Pod on a single node;
-- multiple Pods on a single node;
-- multiple Pods on multiple nodes.
-
-This is because every `Service` load-balances traffic across the matching Pods (via kube-proxy or an equivalent networking component), regardless of its type (headless Services excepted, see below).
-
-Example of `Service` of type `ClusterIP`
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: my-service
-spec:
-  selector:
-    app.kubernetes.io/name: MyApp
-  ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 9376
-```
-
-`ClusterIP` is the default type of `Service`; if the type is not declared, the `Service` is automatically created with the `ClusterIP` type.  
-Once created, other Pods can reach the `ClusterIP` Service both using its assigned CLUSTER-IP (the virtual IP address) and its name.
-
-Example of `Service` of type `NodePort`
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: my-service
-spec:
-  type: NodePort
-  selector:
-    app.kubernetes.io/name: MyApp
-  ports:
-    - port: 80
-      targetPort: 80
-      nodePort: 30007
-```
-
-In a `Service` of type `NodePort`, each element of the array `ports` contains, along with `port` (port of the Service itself) and `targetPort` (destination port on the Pod), the `nodePort`, which is the port opened on every node and reachable from outside the Kubernetes cluster.  
-By default, the `nodePort` must be inside the range 30000 - 32767 (the range can be changed with the API server flag `--service-node-port-range`); it is an optional field and if not declared, a free port from that range is automatically allocated.
-
-> [!NOTE]
->
-> A `Service` can map any incoming `port` to a `targetPort`. By default and for convenience, the `targetPort` is set to the same value as the port field.
-
-Once this type of service has been created, we can access the exposed Pod through `curl http://<node_ip>:<nodePort>`.  
-
-`NodePort` directly exposes a port on every cluster node.  
-The use cases of the `NodePort` `Service` are mainly debugging, temporary operations, and deployments on non-sensitive environments.
-
-With `NodePort`, the client must call the IP address of one of the nodes together with the `nodePort`. This has two main disadvantages:
-
-- if nodes are replaced / updated / added, they may be assigned a new IP address and this breaks the pattern of the previous calls;
-- you expose the IP addresses of the Kubernetes nodes, and this may raise security concerns.
-
-For production environments, it is often preferable to place a `LoadBalancer` or an `Ingress` in front of applications to provide more flexibility and traffic management features.  
-
-Example of `Service` of type `LoadBalancer`
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: my-service
-spec:
-  selector:
-    app.kubernetes.io/name: MyApp
-  ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 9376
-  clusterIP: 10.0.171.239
-  type: LoadBalancer
-status:
-  loadBalancer:
-    ingress:
-    - ip: 192.0.2.127
-```
-
-> [!NOTE]
->
-> This example comes from the Kubernetes documentation: the `clusterIP` and the whole `status` section are shown only for illustration, as they are normally filled in by Kubernetes and by the cloud provider, not written in the manifest.  
-> In environments without a load balancer integration (e.g. bare-metal or local clusters), the `EXTERNAL-IP` of the Service stays `<pending>` and the Service is reachable only as a `NodePort`.
-
-The `Service` types can be viewed as incremental extensions:
-
-- `ClusterIP` exposes the Service inside the cluster through a virtual IP;
-- `NodePort` includes all the features of `ClusterIP` and additionally exposes the `Service` on a fixed port on every cluster node;
-- `LoadBalancer` extends a `NodePort` `Service` by requesting the underlying infrastructure (typically a cloud provider) to provision an external load balancer that forwards traffic to the Service's `nodePort`.
-
-Sometimes you don't need load-balancing and a single Service IP.  
-In this case, you can create a Headless `Service`, by explicitly specifying
-
-```yaml
-spec:
-  clusterIP: None
-```
-
-With the headless `Service`, DNS queries for the Service name return the IP addresses of the individual Pods behind the `Service`, instead of a single virtual IP.  
-This is commonly used by `StatefulSets`, whose Pods also get a stable DNS name each, in the form `<pod-name>.<service-name>.<namespace>.svc.cluster.local`.  
-So the headless `Service` lets you communicate with an exact Pod instead of landing on a random one chosen by kube-proxy.  
-A use case for this type of service is when you have to deal with a stateful application; for example a database with a primary instance that allows writing and several replicas that allow only reading, where you need to choose which one to connect to based on whether you need to write or read data.
-
-For all types of `Service`:
-
-- inside `spec` we define the array `ports`. If we map only one port, the field `name` is optional; if we need to map two or more ports, the field `name` becomes mandatory;
-- when a `Service` with a `selector` is created, Kubernetes also automatically creates the objects that keep track of which Pods are the current endpoints of the service: one or more `EndpointSlice` objects (labeled `kubernetes.io/service-name=<service-name>`) and the legacy `Endpoints` object with the same name as the `Service`. These lists are automatically updated whenever matching Pods are created, deleted, or rescheduled (for example when they are restarted, scaled, or replaced), so that newly created Pods are added as endpoints and Pods that no longer exist are removed;
-- the `targetPort` should match the port on which the application inside the container is actually listening (or its name, if the container port is named);
-- when creating a `Service` (except headless and `ExternalName` ones), an IP address (called the Service's CLUSTER-IP) is assigned to it, allowing access from other workloads using either the assigned CLUSTER-IP or its name.
-
-> [!NOTE]
->
-> The `Endpoints` API is deprecated since Kubernetes v1.33 in favor of `EndpointSlice` (`discovery.k8s.io/v1`), which kube-proxy already uses.  
-> `kubectl get endpoints <service-name>` still works but prints a deprecation warning; the modern equivalent is:
->
-> ```bash
-> kubectl get endpointslices -l kubernetes.io/service-name=<service-name>
-> ```
-
-Here is an example of a `Service` of type `ClusterIP` with two ports, where the field `name` must be present for each port.
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: my-service
-spec:
-  selector:
-    app.kubernetes.io/name: MyApp
-  ports:
-    - name: http
-      protocol: TCP
-      port: 80
-      targetPort: 9376
-    - name: https
-      protocol: TCP
-      port: 443
-      targetPort: 9377
-```
-
-Some commands:
-
-- `kubectl get services`: list the services with their status inside the default namespace;
-- `kubectl describe service <service-name>`: shows detailed information about the service, listing its endpoints (the IP addresses and ports of the selected Pods).
-
----
-
-## Imperative commands
-
-While you would be working mostly using the declarative commands (using definition files), imperative commands can help in getting one-time tasks done quickly, as well as generating a definition template easily.
-
-> [!TIP]
->
-> This would help save a considerable amount of time during your exams.  
-
-Familiarize yourself with the two options that can come in handy while working with the below commands:
-
-- `--dry-run`: by default, as soon as the command is run, the resource will be created. If you simply want to test your command, use the `--dry-run=client` option: the resource is not created, kubectl only builds and validates the object locally, telling you if the command is right. With `--dry-run=server`, instead, the request is sent to the API server, which fully validates it (e.g. name conflicts, admission controllers, quotas) without persisting it, telling you whether the resource can actually be created. Recent kubectl versions require an explicit value, so always write `--dry-run=client` (or `--dry-run=server`), not just `--dry-run`;
-- `-o yaml`: this will output the resource definition in YAML format on the screen.
-
-Use the above two in combination along with Linux output redirection to generate a resource definition file quickly that you can then modify and create resources as required, instead of creating the files from scratch.
-
-Here are some examples
-
-| Command                                                      | Description                         | Dry-run command to generate YAML manifest (and optionally redirect it to a file)                              |
-| ------------------------------------------------------------ | ----------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `kubectl run nginx --image=nginx`                            | Create an NGINX Pod                 | `kubectl run nginx --image=nginx --dry-run=client -o yaml > nginx-pod.yaml`                                   |
-| `kubectl create deployment nginx --image=nginx`              | Create a deployment                 | `kubectl create deployment nginx --image=nginx --dry-run=client -o yaml`                                      |
-| `kubectl create deployment nginx --image=nginx --replicas=4` | Create a deployment with 4 Replicas | `kubectl create deployment nginx --image=nginx --replicas=4 --dry-run=client -o yaml > nginx-deployment.yaml` |
-
-The following command generates the manifest of a `Service` named redis-service of type ClusterIP, which exposes the Pod redis on port 6379, via the `expose` command
-
-```bash
-kubectl expose pod redis --port=6379 --name redis-service --dry-run=client -o yaml
-```
-
-and this will automatically use the Pod's labels as selectors.  
-Or instead, you can do something similar via the service creation command
-
-```bash
-kubectl create service clusterip redis --tcp=6379:6379 --dry-run=client -o yaml
-```
-
-but this will not use the Pod labels as selectors; instead it will assume the selector `app=<service-name>` (here `app=redis`).  
-Considering that you cannot pass in selectors as an option, it does not work well if your Pod has a different label set: for example, Pods created with `kubectl run` are labeled `run=<pod-name>`, while the Pods of a Deployment created with `kubectl create deployment` are labeled `app=<deployment-name>`.  
-So with this second option, after having generated the file, you may need to modify the selectors before creating the service.
-
-To create a `Service` named nginx-service of type `NodePort` that exposes Pod nginx's port 80 as port 30080 on the nodes, using the `expose` command, you need the following command
-
-```bash
-kubectl expose pod nginx --port=80 --name nginx-service --type=NodePort --dry-run=client -o yaml
-```
-
-to generate the definition file.  
-This will automatically use the Pod's labels as selectors, but you cannot specify the `nodePort`: you then need to add the `nodePort` in the file manually before creating the service.  
-Or instead, you can do something similar via the service creation command
-
-```bash
-kubectl create service nodeport nginx --tcp=80:80 --node-port=30080 --dry-run=client -o yaml
-```
-
-But this will not use the Pod's labels as selectors (it assumes `app=nginx`) and you may still need to modify the manifest before applying it.
-
-Both the above commands have their own challenges.  
-While one of them cannot accept a selector, the other cannot accept a `nodePort`.  
-I would recommend going with the `kubectl expose` command and then manually adding the `nodePort` in the manifest file before creating the service.
-
----
-
-## Formatting Output with kubectl
-
-The default output format for all kubectl commands is the human-readable plain-text format.  
-The -o flag lets you output the details in several different formats.
-
-```bash
-kubectl [command] [TYPE] [NAME] -o <output_format>
-```
-
-Here are some of the commonly used formats:
-
-- `-o json`: output a JSON formatted API object;
-- `-o name`: print only the resource name and nothing else;
-- `-o wide`: output in the plain-text format with additional information;
-- `-o yaml`: output a YAML formatted API object.
-
----
-
-## ConfigMaps
-
-Instead of defining environment variables in the Pod definition files, we can inject them into the containers of the Pods using ConfigMaps.  
-ConfigMaps are used to pass configuration data in the form of key-value pairs.
-
-There are two phases involved in setting ConfigMaps:
-
-1) create the `ConfigMap`;
-2) inject it into the pod.
-
-Like other Kubernetes objects, we can create the `ConfigMap` in two ways:
-
-- imperative: `kubectl create configmap` specifying the required arguments;
-- declarative: `kubectl create -f <file-name>`.
-
-Imperatively, this can be done by:
-
-- declaring the key values in the `kubectl` command
-
-  ```bash
-  kubectl create configmap <configmap-name> --from-literal=<key>=<value> [--from-literal=<key>=<value> ...]
-  kubectl create configmap app-config --from-literal=APP_COLOR=blue --from-literal=APP_ENV=prod
-  ```
-
-- loading an entire file (not a manifest) as a **single key** using the `--from-file` syntax
-
-  ```bash
-  kubectl create configmap <configmap-name> --from-file=<path-to-file>
-  kubectl create configmap app-config --from-file=app_config.properties
-  ```
-
-  (with `--from-file=<key>=<path-to-file>` you can also choose a key name different from the file name)
-
-- if instead you want one key for each `KEY=value` line of the file (for example to inject them as environment variables with `envFrom`), use `--from-env-file`:
-
-  ```bash
-  kubectl create configmap app-config --from-env-file=app_config.properties
-  ```
-
-With the declarative approach instead, we do the following
-
-```bash
-kubectl create -f <file-name>
-kubectl create -f config-map.yaml
-```
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: app-config
-data:
-  APP_COLOR: blue
-  APP_ENV: prod
-```
-
-It is important to name the ConfigMaps appropriately as we'll use these names later to associate them with the pods.
-
-In order to inject the `ConfigMap`, we can use the property `envFrom` on the Pod manifest, which is a list of sources (ConfigMaps or Secrets): each key-value pair of each source becomes an environment variable.
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: simple-webapp-color
-spec:
-  containers:
-  - name: simple-webapp-color
-    image: simple-webapp-color
-    ports:
-    - containerPort: 8080
-    envFrom:
-    - configMapRef:
-        name: app-config
-```
-
-And then create the Pod with `kubectl create -f pod-definition.yaml`.
-
-Useful commands:
-
-- `kubectl get configmaps`: list the ConfigMaps inside the default namespace;
-- `kubectl describe configmaps`: also list the configuration data of the ConfigMaps.
-
----
-
-## Secrets
-
-Secrets are similar to ConfigMaps but are specifically intended to hold confidential data.  
-Their data are stored in an encoded format by default, but it is desirable to encrypt them.
-
-As with ConfigMaps, there are two phases involved in setting Secrets:
-
-1) create the Secret;
-2) inject it into the pod.
-
-In addition, there are also different kinds of Secrets, with different use cases and expected keys, on which some checks can be performed by Kubernetes.
-
-| Secret type                           | Typical use                             | Expected keys           |
-| ------------------------------------- | --------------------------------------- | ----------------------- |
-| `Opaque`                              | arbitrary user-defined data             | any keys                |
-| `kubernetes.io/tls`                   | data for a TLS client or server         | `tls.crt`, `tls.key`    |
-| `kubernetes.io/dockerconfigjson`      | serialized `~/.docker/config.json` file | `.dockerconfigjson`     |
-| `kubernetes.io/dockercfg`             | serialized `~/.dockercfg` file          | `.dockercfg`            |
-| `kubernetes.io/basic-auth`            | credentials for basic authentication    | `username`, `password`  |
-| `kubernetes.io/ssh-auth`              | credentials for SSH authentication      | `ssh-privatekey`        |
-| `bootstrap.kubernetes.io/token`       | bootstrap token data                    | many keys expected      |
-| `kubernetes.io/service-account-token` | `ServiceAccount` token                  | automatically generated |
-
-`Opaque` is the default `Secret` type.  
-When you create a `Secret` using kubectl, you must use the `generic` subcommand to indicate an `Opaque` Secret type.
-
-As with ConfigMaps, we can also create Secrets in two ways:
-
-- imperative: `kubectl create secret` specifying the required arguments;
-- declarative: `kubectl create -f <file-name>`.
-
-Imperatively, this can be done by declaring the key values in the `kubectl` command
-
-```bash
-kubectl create secret generic <secret-name> --from-literal=<key>=<value>
-kubectl create secret generic app-secret --from-literal=DB_Host=mysql --from-literal=DB_User=root --from-literal=DB_Password=paswrd
-```
-
-(but this can be complicated when we need to pass many values)
-
-or (still imperatively) through a file (not a manifest)
-
-```bash
-kubectl create secret generic <secret-name> --from-file=<path-to-file>
-kubectl create secret generic app-secret --from-file=app_secret.properties
-```
-
-(the same `--from-file` / `--from-env-file` distinction seen for ConfigMaps applies here)
-
-With the declarative approach instead, we do the following
-
-```bash
-kubectl create -f <file-name>
-kubectl create -f secret-data.yaml
-```
-
-When using the declarative approach, we should specify the data in `Base64` format.  
-For this purpose, we can use the `base64` Linux utility `echo -n 'VALUE' | base64`:
-
-```console
-$ echo -n 'mysql' | base64
-bXlzcWw=
-$ echo -n 'root' | base64
-cm9vdA==
-$ echo -n 'paswrd' | base64
-cGFzd3Jk
-```
-
-which makes the secret definition file look like the following
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: app-secret
-data:
-  DB_Host: bXlzcWw=
-  DB_User: cm9vdA==
-  DB_Password: cGFzd3Jk
-```
-
-We can also prepare the manifest without encoding the data by using the `stringData` field instead of `data`.  
-For example, the following example is equivalent to the previous one
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: app-secret
-stringData:
-  DB_Host: mysql
-  DB_User: root
-  DB_Password: paswrd
-```
-
-> [!CAUTION]
->
-> The `data` field stores values encoded in Base64.  
-> The `stringData` field accepts plain text values and is automatically converted by the Kubernetes API server to Base64 when the `Secret` is created or updated, and stored into the `data` field.
->
-> Base64 is **not encryption**. It is only an encoding format used to represent binary data as text.  
-> Kubernetes Secrets are, by default, stored unencrypted in the API server's underlying data store (etcd).  
-> In order to safely use Secrets, take at least the following steps:
->
-> - enable Encryption at Rest for Secrets;
-> - enable or configure RBAC rules with least-privilege access to Secrets;
-> - restrict secrets access to specific containers;
-> - consider using External Secret store providers (like AWS Provider, Azure Provider, GCP Provider or Vault Provider).
-
-In order to decode the encoded values, use the same `base64` utility adding a `--decode` parameter, so `echo -n 'DATA' | base64 --decode`:
-
-```console
-$ echo -n 'bXlzcWw=' | base64 --decode
-mysql
-
-$ echo -n 'cm9vdA==' | base64 --decode
-root
-
-$ echo -n 'cGFzd3Jk' | base64 --decode
-paswrd
-```
-
-In order to inject the secret, also here we can use the property `envFrom` on the Pod manifest.
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: simple-webapp-color
-spec:
-  containers:
-  - name: simple-webapp-color
-    image: simple-webapp-color
-    ports:
-    - containerPort: 8080
-    envFrom:
-    - secretRef:
-        name: app-secret
-```
-
-And then create the Pod with `kubectl create -f pod-definition.yaml`.
-
-Useful commands:
-
-- `kubectl get secrets`: list the secrets inside the default namespace;
-- `kubectl describe secrets`: shows the attributes of the secrets but **hides the values**;
-- `kubectl get secret <secret-name> -o yaml`: list the attributes of a specific secret, **along with the encoded values**.
-
----
-
-## Other options to inject ConfigMaps and Secrets
-
-Along with `configMapRef` and `secretRef`, which let you inject all the key-values of a resource as environment variables,  
-there are also the `configMapKeyRef` and `secretKeyRef` options for choosing specific keys to import.
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx
-spec:
-  containers:
-  - name: nginx
-    image: nginx:1.14.2
-    ports:
-    - containerPort: 80
-    env:
-    - name: HOST
-      valueFrom:
-        configMapKeyRef:
-          name: nginx-config
-          key: nginx.host
-    - name: DB_PASSWORD
-      valueFrom:
-        secretKeyRef:
-          name: db-credentials
-          key: password
-    envFrom:
-    - configMapRef:
-        name: nginx-config-bulk
-    - secretRef:
-        name: nginx-secrets-bulk
-```
-
-Instead of exposing ConfigMaps and Secrets as environment variables, they can also be mounted as volumes.  
-In this case, each key becomes a file within the mounted volume with:
-
-- the filename corresponding to the key;
-- the file content corresponding to the associated value.
-
-The following example mounts both a `ConfigMap` and a `Secret` as Volumes.
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: nginx-config
-data:
-  nginx.conf: |
-    events {}
-
-    http {
-      server {
-        listen 443 ssl;
-
-        ssl_certificate     /etc/nginx/tls/tls.crt;
-        ssl_certificate_key /etc/nginx/tls/tls.key;
-
-        location / {
-          return 200 "Hello from Kubernetes!\n";
-        }
-      }
-    }
-```
-
-```bash
-openssl req \
-  -x509 \
-  -newkey rsa:2048 \
-  -nodes \
-  -days 365 \
-  -keyout tls.key \
-  -out tls.crt \
-  -subj "/CN=localhost"
-```
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: nginx-tls
-type: kubernetes.io/tls
-stringData:
-  tls.crt: |
-    -----BEGIN CERTIFICATE-----
-    [replace with generated tls.crt content]
-    -----END CERTIFICATE-----
-  tls.key: |
-    -----BEGIN PRIVATE KEY-----
-    [replace with generated tls.key content]
-    -----END PRIVATE KEY-----
-```
-
-Here we used `stringData` for the `tls.crt` and `tls.key` elements of the secret, which allows us to write data in a non-encoded format.  
-When applied, Kubernetes automatically encodes the values of `stringData` in Base64 and puts them instead in the `data` field.  
-We are also using a Secret of type `kubernetes.io/tls` instead of a generic `Opaque` type.
-
-> [!TIP]
->
-> For the exam, it is much faster to create these two objects imperatively:
->
-> ```bash
-> kubectl create configmap nginx-config --from-file=nginx.conf
-> kubectl create secret tls nginx-tls --cert=tls.crt --key=tls.key
-> ```
->
-> The first command creates a key named `nginx.conf` (the file name) containing the whole file; the second one creates a Secret of type `kubernetes.io/tls` with the `tls.crt` and `tls.key` keys.
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx-with-volumes
-spec:
-  containers:
-  - name: nginx
-    image: nginx:1.14.2
-    ports:
-    - containerPort: 443
-    volumeMounts:
-    - name: nginx-config
-      mountPath: /etc/nginx/nginx.conf
-      subPath: nginx.conf
-    - name: nginx-tls
-      mountPath: /etc/nginx/tls
-      readOnly: true
-  volumes:
-  - name: nginx-config
-    configMap:
-      name: nginx-config
-  - name: nginx-tls
-    secret:
-      secretName: nginx-tls
-```
-
-> [!NOTE]
->
-> Here we used `subPath` for the `volumeMount` of the configuration.  
-> Without `subPath`, the entire volume is mounted at `mountPath`. With `subPath`, only the specified file or directory within the volume is mounted at `mountPath`.  
->
-> In this example, we are essentially saying:  
-> > From the nginx-config volume, take only the nginx.conf file and mount it here.
->
-> ```text
-> /etc/nginx/
->         └── nginx.conf
->
-> /etc/nginx/tls/
->             ├── tls.crt
->             └── tls.key
-> ```
->
-> Using `subPath` is particularly useful when we want to mount a single file or directory **without replacing or hiding the other contents of the target directory**.  
-> For example, mounting the entire `nginx-config` volume at `/etc/nginx` would hide the files that are already present in `/etc/nginx` in the container image. Using `subPath` allows us to mount only `nginx.conf`, leaving the rest of `/etc/nginx` untouched.  
-> Therefore, if we want to mount an entire volume and its contents, we can omit `subPath`. If we want to mount only a specific file or directory while preserving the existing contents of the target directory, we can use `subPath`.
->
-> A `subPath` mount also does not receive automatic updates when the underlying `ConfigMap` or `Secret` changes.
->
-> We are also using `readOnly: true`, which is optional for Secret and ConfigMap volumes (they are read-only by nature), but explicitly specifying it makes the intent clearer.
->
-> Notice that the field used to specify the referenced object is not named consistently: `ConfigMap` volumes use `configMap.name`, while `Secret` volumes use `secret.secretName`. Both fields contain the name of the corresponding Kubernetes object.
-
-```bash
-kubectl apply -f nginx-config.yaml
-kubectl apply -f nginx-tls.yaml
-kubectl apply -f nginx-with-volumes.yaml
-```
-
-And we can see that the files are mounted as expected with the following commands
-
-```console
-$ kubectl exec nginx-with-volumes -- cat /etc/nginx/nginx.conf
-events {}
-
-http {
-  server {
-    listen 443 ssl;
-
-    ssl_certificate     /etc/nginx/tls/tls.crt;
-    ssl_certificate_key /etc/nginx/tls/tls.key;
-
-    location / {
-      return 200 "Hello from Kubernetes!\n";
-    }
-  }
-}
-
-$ kubectl exec nginx-with-volumes -- ls /etc/nginx/tls
-tls.crt
-tls.key
-```
-
-> [!TIP]
->
-> This is a common production pattern:
->
-> - the `ConfigMap` stores the NGINX configuration, which can change frequently;
-> - the `Secret` stores the TLS certificate and the private key.
->
-> Keeping configuration and sensitive data outside the container image makes the application easier to configure and more secure.
-
-You can also mount only specific keys by using the `items` field.
-
-```yaml
-volumes:
-- name: config-volume
-  configMap:
-    name: nginx-config
-    items:
-    - key: nginx.conf
-      path: nginx.conf
-- name: secret-volume
-  secret:
-    secretName: nginx-tls
-    items:
-    - key: tls.crt
-      path: tls.crt
-    - key: tls.key
-      path: tls.key
-```
-
-Only the listed keys are mounted, and the `path` can also be different from the key, to rename the file (e.g. `key: tls.crt` with `path: server.crt`).
-
-> [!CAUTION]
->
-> A `Secret` or `ConfigMap` mounted as a `volume` is not stored inside the container image.  
-> Kubernetes creates the files dynamically and mounts them into the container's filesystem (Secrets are mounted on a `tmpfs`, an in-memory filesystem, so they are never written to the node's disk).
->
-> If the `Secret` or `ConfigMap` is updated, the mounted files are automatically updated as well (with a small delay), without restarting the `Pod`, except when using `subPath` (and other particular cases).  
-> However, only the files are updated: the application must detect the change and reload its configuration by itself (for example, NGINX needs an `nginx -s reload`).  
-> Instead, when a `Secret` or `ConfigMap` is exposed as environment variable, the `Pod` must be recreated to see the new values (for a Deployment, for example with `kubectl rollout restart deployment <deployment-name>`).
-
-```text
-                ConfigMap / Secret
-                        │
-        ┌───────────────┴───────────────┐
-        │                               │
-        ▼                               ▼
-Environment Variables             Mounted Volume
-        │                               │
-        ▼                               ▼
-    env / envFrom              volume + volumeMount
-        │                               │
-        ▼                               ▼
-Available at startup            Available as files
-        │                               │
-        ▼                               ▼
-Pod restart required        Files automatically updated
-  (after changes)                (except subPath)
-```
-
-> [!TIP]
->
-> Use a normal `ConfigMap` or `Secret` volume when you want configuration updates to be propagated automatically to a running `Pod` (the application still has to reload them).  
-> Use `subPath` when you need to mount a single file to a specific location in the container's filesystem, but remember that updates to the `ConfigMap` or `Secret` will **not** be reflected until the `Pod` is recreated.
-
----
-
-## Security Contexts
-
-A security context defines privilege and access control settings for a `Pod` or a container. The most common are:
-
-- `runAsUser`: specifies the Linux User ID (UID) used to run the container processes;
-- `runAsGroup`: specifies the Linux Primary Group ID (GID) used to run the container processes;
-- `runAsNonRoot`: prevents the container from running as the root user (UID 0);
-- `fsGroup`: defines a supplementary GID added to the container processes; the mounted volumes that support it are made owned by this GID, so that the processes can write to them;
-- Linux Capabilities: for example `NET_ADMIN`, `MAC_ADMIN` or `ALL`, which you can add or remove with `capabilities.add` and `capabilities.drop`.
-
-Some of the security context parameters can be set at container level, some at Pod level, while others can be set both at container and Pod level.  
-The following table shows where some of the main security context parameters can be set.
-
-| Setting                    | Pod                | Container          |
-| -------------------------- | ------------------ | ------------------ |
-| `runAsUser`                | :white_check_mark: | :white_check_mark: |
-| `runAsGroup`               | :white_check_mark: | :white_check_mark: |
-| `runAsNonRoot`             | :white_check_mark: | :white_check_mark: |
-| `fsGroup`                  | :white_check_mark: | :x:                |
-| `supplementalGroups`       | :white_check_mark: | :x:                |
-| `seLinuxOptions`           | :white_check_mark: | :white_check_mark: |
-| `seccompProfile`           | :white_check_mark: | :white_check_mark: |
-| `appArmorProfile`          | :white_check_mark: | :white_check_mark: |
-| `capabilities`             | :x:                | :white_check_mark: |
-| `privileged`               | :x:                | :white_check_mark: |
-| `allowPrivilegeEscalation` | :x:                | :white_check_mark: |
-| `readOnlyRootFilesystem`   | :x:                | :white_check_mark: |
-
-> [!NOTE]
->
-> A Pod-level `securityContext` defines the default security settings for all containers in the `Pod`.  
-> A Container-level `securityContext` applies only to that container and overrides the Pod-level setting whenever the same field can be specified at both levels.
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: web-pod
-spec:
-  securityContext:
-    runAsUser: 1000
-    runAsGroup: 3000
-    runAsNonRoot: true
-  containers:
-  - name: ubuntu
-    image: ubuntu
-    command: ["sleep", "3600"]
-    securityContext:
-      capabilities:
-        add:
-        - NET_ADMIN
-```
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: web-pod
-spec:
-  containers:
-  - name: ubuntu
-    image: ubuntu
-    command: ["sleep", "3600"]
-    securityContext:
-      runAsUser: 1000
-      runAsGroup: 3000
-      runAsNonRoot: true
-      capabilities:
-        drop: ["ALL"]
-```
-
-> [!NOTE]
->
-> Capabilities added with `capabilities.add` are reliably effective only for processes running as root: with the common container runtimes, a process running as a non-root user (like UID 1000 in the first example) usually does not get them, because they are not set as *ambient* capabilities. The first example is therefore mainly a syntax example.  
-> Dropping capabilities (`drop: ["ALL"]`), instead, always works and is a common hardening practice.
-
-If you want to check the user running a process, you can:
-
-- list the processes with the `ps aux` command from the host machine;
-- print the current user ID, group ID, and the groups it belongs to with `kubectl exec <pod-name> -- id`;
-- print the current username with `kubectl exec <pod-name> -- whoami`.
-
----
-
-## Resource requirements
-
-When scheduling a `Pod`, the kube-scheduler compares the resource requests of the Pod with the resources still available on each node, i.e. the node's allocatable resources minus the requests of the Pods already scheduled there (the actual usage of the node is **not** considered).  
-If a node does not have enough available resources, the kube-scheduler will not schedule the Pod onto that node and will instead search for nodes with sufficient resources available.  
-If no node has sufficient available resources, the Pod remains in the `Pending` state until suitable resources become available.
-
-We can specify the amount of CPU and memory requested by a container at creation with `resources.requests`.
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: simple-webapp-color
-spec:
-  containers:
-  - name: simple-webapp-color
-    image: simple-webapp-color
-    ports:
-    - containerPort: 8080
-    resources:
-      requests:
-        memory: "4Gi"
-        cpu: 2
-```
-
-For CPU resources, you can specify values as low as `1m` (one millicore), which corresponds to `0.001` CPU.  
-For example, the following values are equivalent:
-
-- `0.1`
-- `"0.1"`
-- `"100m"`
-
-Similarly, memory can be specified in different units:
-
-| unit | unit name | capacity in bytes | power |
-| ---- | --------- | ----------------- | ----- |
-| `k`  | Kilobytes | 1,000             | 10^3  |
-| `Ki` | Kibibytes | 1,024             | 2^10  |
-| `M`  | Megabytes | 1,000,000         | 10^6  |
-| `Mi` | Mebibytes | 1,048,576         | 2^20  |
-| `G`  | Gigabytes | 1,000,000,000     | 10^9  |
-| `Gi` | Gibibytes | 1,073,741,824     | 2^30  |
-| `T`  | Terabytes | 1,000,000,000,000 | 10^12 |
-| `Ti` | Tebibytes | 1,099,511,627,776 | 2^40  |
-
-For example, the following values represent approximately the same amount of memory:
-
-- `256Mi`
-- `268435456` (bytes)
-- `268M`
-
-> [!CAUTION]
->
-> Suffixes are case-sensitive: the decimal kilo is a lowercase `k` (uppercase `K` is not valid), and `m` means *milli*, so `memory: 400m` is a request for 0.4 bytes, not for 400 megabytes!
-
-You can set a limit to the resources used by a container with `resources.limits`.
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: simple-webapp-color
-spec:
-  containers:
-  - name: simple-webapp-color
-    image: simple-webapp-color
-    ports:
-    - containerPort: 8080
-    resources:
-      requests:
-        memory: "1Gi"
-        cpu: 2
-      limits:
-        memory: "2Gi"
-        cpu: 2
-```
-
-If the limit is exceeded:
-
-- CPU: the container is throttled (it simply cannot use more CPU time);
-- Memory: the container may be terminated due to an out-of-memory (OOM) event.
-
-> [!CAUTION]
->
-> A memory limit does not guarantee that a container will never be `OOMKilled`.  
-> It defines the maximum amount of memory the container is allowed to consume: if a container exceeds its memory limit, the kernel may terminate one or more processes in the container with an out-of-memory (OOM) kill.  
-> Moreover, even a container below its limit can be OOM-killed or evicted when the node itself runs out of memory, especially if it is using more memory than it requested.
-
-Resource `requests` and `limits` have different purposes:
-
-- **requests** are primarily used for **scheduling**: the scheduler uses the requested resources to determine whether a Node has enough allocatable resources to host the Pod;
-- **limits** are used for **runtime enforcement**: they define the maximum amount of a resource that a container is allowed to consume.
-
-If `limits` are specified but `requests` are not, Kubernetes automatically sets the `requests` to the same values as the `limits`.  
-Both `resources.requests` and `resources.limits` are normally defined at container level (`spec.containers[*].resources`).  
-Since Kubernetes v1.34, you can also define an overall budget at Pod level (`spec.resources`, a beta feature enabled by default); when both are specified, the Pod-level values take precedence. For the exam, the container level remains the standard approach.
-
-> [!NOTE]
->
-> By default a container has no `limits` or `requests` on resources.  
-> This means that, unless other policies apply, a container is not explicitly constrained by CPU or memory requests/limits and may consume resources available on the node, potentially affecting other workloads.
->
-> A resource request is not a maximum usage value.
->
-> For example, if a container has:
->
-> ```yaml
-> resources:
->   requests:
->     memory: 1Gi
->   limits:
->     memory: 4Gi
-> ```
->
-> the scheduler uses 1 GiB when determining whether the Pod can be scheduled, but the container can use more than 1 GiB at runtime, up to its 4 GiB limit.
-
-You can also create `LimitRange` objects at namespace level to constrain resource allocations.  
-For Pods and containers, a `LimitRange` can define default, minimum and maximum CPU and memory `requests` and `limits`.  
-It can also define minimum and maximum storage requests for `PersistentVolumeClaims` (storage-related configuration is covered in more detail later in the course).
-
-```yaml
-apiVersion: v1
-kind: LimitRange
-metadata:
-  name: resource-constraint
-spec:
-  limits:
-  - default:
-      cpu: 500m
-      memory: 1Gi
-    defaultRequest:
-      cpu: 250m
-      memory: 512Mi
-    max:
-      cpu: "1"
-      memory: 1Gi
-    min:
-      cpu: 100m
-      memory: 500Mi
-    type: Container
-```
-
-Note that `LimitRange` constraints and defaults are applied during Pod admission.  
-If we create or change a `LimitRange`, it does not affect existing Pods; it applies to newly created Pods.
-
-> [!TIP]
->
-> Not all fields (`default`, `defaultRequest`, `max`, `min`, `maxLimitRequestRatio`, etc.) are meaningful for every `type`. For example:
->
-> - `default` and `defaultRequest` are intended for `type: Container`, as they define the default resource requests and limits applied to individual containers;
-> - for `type: Pod`, only `min`, `max` (and `maxLimitRequestRatio`) can be used, and they apply to the sum of the requests/limits of all the containers of the Pod; `default` and `defaultRequest` are rejected, because defaults are applied to individual containers.
-
-Finally, you can also create `ResourceQuota` objects at namespace level to limit the aggregate amount of resources that can be requested or limited across all Pods in that namespace.  
-For example, a `ResourceQuota` can limit the total amount of CPU and memory requests and limits across all Pods in a namespace (it can also limit the number of objects of a given kind, e.g. `pods: "10"`).  
-If creating or updating a resource would cause the quota to be exceeded, the request is rejected by the API server.
-
-```yaml
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: my-resource-quota
-spec:
-  hard:
-    requests.cpu: 4
-    requests.memory: 8Gi
-    limits.cpu: 8
-    limits.memory: 16Gi
-```
-
-> [!IMPORTANT]
->
-> When a `ResourceQuota` limits CPU or memory (`requests.*` or `limits.*`), every new Pod in the namespace must specify the corresponding requests or limits, otherwise its creation is rejected.  
-> A `LimitRange` with `default` / `defaultRequest` values is the usual way to provide them automatically.
-
-```text
-Namespace
-│
-├── Pod A
-│   ├── request: 1 CPU / 2 GiB
-│   └── limit:   2 CPU / 4 GiB
-│
-├── Pod B
-│   ├── request: 2 CPU / 4 GiB
-│   └── limit:   4 CPU / 8 GiB
-│
-└── Pod C
-    ├── request: 1 CPU / 2 GiB
-    └── limit:   2 CPU / 4 GiB
-
-Total requests: 4 CPU / 8 GiB  ← quota reached
-Total limits:   8 CPU / 16 GiB ← quota reached
-```
-
-> [!NOTE]
->
-> Unlike a container `resources.limits`, a `ResourceQuota` does not limit the resources available to a single container or Pod.  
-> It limits the aggregate resource consumption of the namespace.
-
-| Mechanism       | Scope     | Main purpose                              |
-| --------------- | --------- | ----------------------------------------- |
-| `requests`      | Container | Scheduling                                |
-| `limits`        | Container | Runtime enforcement                       |
-| `LimitRange`    | Namespace | Constrain individual resource allocations |
-| `ResourceQuota` | Namespace | Limit aggregate resource consumption      |
-
----
-
-## Service Accounts
-
-In Kubernetes there are two types of accounts:
-
-- user account: used by humans (an admin that performs administrative tasks or a developer deploying applications);
-- service account: used by an application to interact with the Kubernetes cluster (a monitoring application like Prometheus or a build tool like Jenkins).
-
-Kubernetes has no `User` object: users are managed outside the cluster (e.g. with client certificates or an external identity provider), while ServiceAccounts are namespaced Kubernetes objects.
-
-A service account is a type of non-human account that provides a distinct identity in a Kubernetes cluster.  
-The concept of Service Account is linked to other security-related concepts in Kubernetes, such as authentication, authorization, RBAC, etc.
-
-> [!IMPORTANT]
->
-> A `ServiceAccount` **does not grant permissions by itself**.  
-> Permissions are granted by binding the `ServiceAccount` to a `Role` or `ClusterRole` using RBAC.
->
-> Pods authenticate to the Kubernetes API using a ServiceAccount.  
-> What the Pod is allowed to do depends on the RBAC permissions assigned to that ServiceAccount, not on the ServiceAccount itself.
-
----
-
-### The default ServiceAccount
-
-A service account named `default` already exists by default in every Kubernetes namespace.  
-Whenever a Pod is created without specifying a ServiceAccount, it is assigned the `default` service account of its namespace, and a token for it is automatically mounted into the Pod as a projected volume on the path `/var/run/secrets/kubernetes.io/serviceaccount`.  
-You can see that with the command `kubectl describe pod <pod-name>`.
-
-```text
-    Mounts:
-      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-srhgg (ro)
-```
-
-If you list the contents of that directory, you will see three files projected into the Pod
-
-```console
-$ kubectl exec -it nginx -- ls /var/run/secrets/kubernetes.io/serviceaccount
-ca.crt  namespace  token
-```
-
-The token is automatically mounted unless explicitly disabled with the setting `automountServiceAccountToken: false`, either in the `ServiceAccount` or in the Pod `spec` (the Pod setting takes precedence).
-
-> [!NOTE]
->
-> By default, the `default` ServiceAccount has very limited permissions.  
-> What it can do depends on the RBAC roles bound to it.
-
----
-
-### Using a custom ServiceAccount
-
-If you want to use a different `ServiceAccount`, specify its name in the `serviceAccountName` field.
-
-```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: dashboard-sa
-  namespace: default
-```
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: my-kubernetes-dashboard
-spec:
-  containers:
-  - name: my-kubernetes-dashboard
-    image: nginx
-  serviceAccountName: dashboard-sa
-```
-
-```bash
-kubectl create -f dashboard-sa.yaml
-kubectl create -f my-kubernetes-dashboard.yaml
-```
-
-When you look at the Pod details now, you see that the new `ServiceAccount` is being used
-
-```console
-$ kubectl describe pod my-kubernetes-dashboard
-    Mounts:
-      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-bxmxs (ro)
-
-$ kubectl exec -ti my-kubernetes-dashboard -- ls /var/run/secrets/kubernetes.io/serviceaccount
-ca.crt  namespace  token
-```
-
-> [!IMPORTANT]
->
-> A Pod can reference a ServiceAccount only at creation time.
->
-> To change the ServiceAccount, recreate the Pod or update the Deployment so that a new rollout is triggered.
-
----
-
-### ServiceAccount tokens
-
-A ServiceAccount is mainly used to authenticate to the Kubernetes API.  
-A ServiceAccount token is obtained through the TokenRequest API and projected into the Pod as part of a projected volume.
-
-Inside the mounted `ServiceAccount` volume, the `token` file contains the ServiceAccount token, which is a JWT (three Base64URL-encoded parts separated by dots: header, payload and signature).
-
-```console
-$ kubectl exec -it nginx -- cat /var/run/secrets/kubernetes.io/serviceaccount/token
-eyJhbGciOiJSUzI1NiIsImtpZCI6ImRSR3pRcTRSamFxTGdqS0hSZHhmN2w4RmtTMTFtZzdhUDJWSlB1NjNrVTgifQ.eyJhdWQiOlsiaHR0cHM6Ly9rdWJlcm5ldGVzLmRlZmF1bHQuc3ZjLmNsdXN0ZXIubG9jYWwiXSwi...(truncated)
-```
-
-You can use the JWT as a Bearer token when authenticating to the Kubernetes REST API (for example with curl, you can pass it in the `Authorization` header).
-
-If decoded, the JWT has the following structure
-
-```json
-{
-  "aud": [
-    "https://kubernetes.default.svc.cluster.local"
-  ],
-  "exp": 1815145972,
-  "iat": 1783609972,
-  "iss": "https://kubernetes.default.svc.cluster.local",
-  "jti": "bda93a42-b79d-4d58-ab2d-0ffa7f7b4e8b",
-  "kubernetes.io": {
-    "namespace": "default",
-    "node": {
-      "name": "minikube",
-      "uid": "26a29340-27ef-44c6-b543-8baeaec7f4cb"
-    },
-    "pod": {
-      "name": "nginx",
-      "uid": "5c711d3a-81c3-44ae-a1e1-998f53346a9f"
-    },
-    "serviceaccount": {
-      "name": "default",
-      "uid": "17ef408b-78a1-4e54-b064-a3c755826052"
-    },
-    "warnafter": 1783613579
-  },
-  "nbf": 1783609972,
-  "sub": "system:serviceaccount:default:default"
-}
-```
-
-We can notice the `exp` field, which specifies the expiration time of the token.  
-The default token duration is one hour from the creation time (this is also the default duration of the tokens created with `kubectl create token`), but the effective duration depends on the cluster configuration.  
-In fact, in this example `exp - iat` is exactly one year, while `warnafter - iat` is about one hour (3607 seconds): the kubelet requested a token of about one hour for the projected volume, but the API server extended its expiration (flag `--service-account-extend-token-expiration`, enabled by default) for backward compatibility with clients that do not reload the token from the file. After `warnafter` the token still works, but its use is flagged by the API server as stale.  
-In any case, the kubelet automatically rotates the projected token before it expires.
-
-You can also generate a new JWT with `kubectl create token <serviceaccount-name>`.
-
----
-
-### A preview about RBAC, Roles, RoleBindings
-
-If you try to check if the `dashboard-sa` ServiceAccount has the right to query the Kubernetes API with the command
-
-```bash
-kubectl auth can-i get pods --as=system:serviceaccount:default:dashboard-sa
-```
-
-you will receive a `no` as a response, because no permissions have been assigned to it.
-
-If, instead, you create a `Role` and assign it with a `RoleBinding`
-
-```yaml
----
-kind: Role
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  namespace: default
-  name: pod-reader
-rules:
-- apiGroups:
-  - ''
-  resources:
-  - pods
-  verbs:
-  - get
-  - watch
-  - list
-```
-
-```yaml
----
-kind: RoleBinding
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: read-pods
-  namespace: default
-subjects:
-- kind: ServiceAccount
-  name: dashboard-sa # Name is case sensitive
-  namespace: default
-roleRef:
-  kind: Role # must be Role or ClusterRole
-  name: pod-reader # must match the name of the Role or ClusterRole you wish to bind to
-  apiGroup: rbac.authorization.k8s.io
-```
-
-```bash
-kubectl apply -f pod-reader-role.yaml
-kubectl apply -f read-pods-role-binding.yaml
-```
-
-If you re-execute the command above, you will see that the response is now `yes`, because the ServiceAccount has been granted the required permissions.
-
-```text
- Application
-      │
-      ▼
-ServiceAccount
-      │
-      ▼
-  JWT Token
-      │
-      ▼
-Authentication
-      │
-      ▼
-    RBAC
-      │
-      ▼
-Allowed / Denied
-```
-
-This topic will be covered in more detail later.
-
----
-
-### Manually mount a ServiceAccount token
-
-You manually mount a ServiceAccount token by disabling automatic mounting of API credentials and using a projected volume.
-
-By default, a token is mounted into every Pod, even if the application never talks to the Kubernetes API.  
-If a container is compromised, an attacker can read the token from the filesystem and use it to call the Kubernetes API with all the permissions of the ServiceAccount.  
-Disabling the automatic mount makes API credentials **opt-in**: only the Pods (and the containers) that really need a token get one, and you decide where it is mounted, how long it lasts and who it is meant for.
-
-The automatic mount is controlled by the `automountServiceAccountToken` field, which can be set in the `ServiceAccount` (as the default for all the Pods that use it) and in the Pod `spec` (which takes precedence):
-
-| `ServiceAccount`  | Pod `spec` | Token mounted automatically? |
-| ----------------- | ---------- | ---------------------------- |
-| not set or `true` | not set    | yes (default behavior)       |
-| `false`           | not set    | no                           |
-| any value         | `true`     | yes (the Pod setting wins)   |
-| any value         | `false`    | no (the Pod setting wins)    |
-
-With `automountServiceAccountToken: false` and nothing else, the Pod has no token at all: this is the right choice for applications that never call the Kubernetes API.
-
-> [!NOTE]
->
-> The automatic mount is itself a projected volume, which the ServiceAccount admission controller adds to the Pod when it is created.  
-> A projected volume combines several sources (such as `serviceAccountToken`, `configMap`, `secret` and `downwardAPI`) into a single directory.  
-> You can see it in the output of `kubectl get pod nginx -o yaml`:
->
-> ```yaml
->   volumes:
->   - name: kube-api-access-srhgg
->     projected:
->       defaultMode: 420 # file permissions (0644 in octal)
->       sources:
->       - serviceAccountToken:
->           expirationSeconds: 3607
->           path: token
->       - configMap:
->           items:
->           - key: ca.crt
->             path: ca.crt
->           name: kube-root-ca.crt
->       - downwardAPI:
->           items:
->           - fieldRef:
->               apiVersion: v1
->               fieldPath: metadata.namespace
->             path: namespace
-> ```
->
-> Each source produces one of the three files seen before:
->
-> - `token`: the ServiceAccount token. 3607 seconds (one hour and 7 seconds) is the special duration requested for the tokens injected by the admission controller: when the API server receives a request for this duration, it extends the expiration to one year (see above);
-> - `ca.crt`: the certificate of the cluster CA, used to verify the TLS certificate of the API server. It comes from the `kube-root-ca.crt` ConfigMap, which Kubernetes creates in every namespace;
-> - `namespace`: the namespace of the Pod, taken from its metadata through the Downward API.
-
-Here is an example of manually mounting a ServiceAccount token to a Deployment named `web-dashboard`.  
-It uses the `dashboard-sa` ServiceAccount, the `pod-reader` Role and the `read-pods` RoleBinding created in the previous sections.  
-The application of the Deployment (a dashboard) reads the token mounted in the Pod and uses it to list the Pods through the Kubernetes API: here we simulate it with `curl`, which is included in the `nginx` image.
-
-1) **Create the Deployment**  
-   Save the following manifest as `web-dashboard.yaml`.  
-   It does not specify a ServiceAccount, so its Pods use the `default` one, with the token mounted automatically.
-
-   ```yaml
-   apiVersion: apps/v1
-   kind: Deployment
-   metadata:
-     name: web-dashboard
-     namespace: default
-     labels:
-       name: web-dashboard
-   spec:
-     replicas: 1
-     selector:
-       matchLabels:
-         name: web-dashboard
-     template:
-       metadata:
-         labels:
-           name: web-dashboard
-       spec:
-         containers:
-         - name: web-dashboard
-           image: nginx:1.28                  # includes curl, used below to call the Kubernetes API
-           ports:
-           - containerPort: 80
-   ```
-
-   ```bash
-   kubectl create -f web-dashboard.yaml
-   kubectl rollout status deployment web-dashboard
-   ```
-
-   Now do what the application does: read the token mounted in the Pod and use it to ask the API server for the list of the Pods in the `default` namespace.
-
-   ```console
-   $ kubectl exec deploy/web-dashboard -- sh -c 'curl -sk -w "\n" \
-       -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
-       https://kubernetes.default.svc/api/v1/namespaces/default/pods'
-   {
-     "kind": "Status",
-     "apiVersion": "v1",
-     "metadata": {},
-     "status": "Failure",
-     "message": "pods is forbidden: User \"system:serviceaccount:default:default\" cannot list resource \"pods\" in API group \"\" in the namespace \"default\"",
-     "reason": "Forbidden",
-     "details": {
-       "kind": "pods"
-     },
-     "code": 403
-   }
-   ```
-
-   The command runs `curl` inside the container:
-
-   - `$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)` reads the token, which is sent in the `Authorization: Bearer <token>` header;
-   - `https://kubernetes.default.svc` is the address of the API server from inside the cluster (the `kubernetes` Service of the `default` namespace);
-   - `-s` hides the progress bar, `-w "\n"` adds a newline after the response and `-k` skips the verification of the API server certificate (at the end of the procedure, `ca.crt` will no longer be mounted).
-
-   The API server accepts the token and identifies the Pod as `system:serviceaccount:default:default` (authentication succeeded), but the `default` ServiceAccount has no permission to list the Pods, so the request is denied with `403 Forbidden`.  
-   An invalid token, instead, would be rejected with `401 Unauthorized`.
-
-2) **Use the ServiceAccount in the Deployment**  
-   A projected token is always issued for the ServiceAccount of the Pod (the `serviceAccountToken` source has no field to choose a different one).  
-   So the Deployment must use `dashboard-sa`, which can list the Pods thanks to the `read-pods` RoleBinding (see the previous section):
-
-   ```bash
-   kubectl set serviceaccount deployment web-dashboard dashboard-sa
-   kubectl rollout status deployment web-dashboard
-   ```
-
-   (short form: `kubectl set sa deploy/web-dashboard dashboard-sa`)  
-   Alternatively, run `kubectl edit deployment web-dashboard` and set `serviceAccountName: dashboard-sa` under `spec.template.spec`.  
-   In both cases the Pod template changes, so the Deployment rolls out new Pods that use the new ServiceAccount.
-
-   Before running the next command, check with `kubectl get pods -l name=web-dashboard` that the old Pod has disappeared (it can stay in `Terminating` for a few seconds after the rollout), otherwise `kubectl exec deploy/web-dashboard` may still run in it.  
-   This time, the same `curl` command returns the list of the Pods:
-
-   ```console
-   $ kubectl exec deploy/web-dashboard -- sh -c 'curl -sk -w "\n" \
-       -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
-       https://kubernetes.default.svc/api/v1/namespaces/default/pods'
-   {
-     "kind": "PodList",
-     "apiVersion": "v1",
-     ...
-   ```
-
-3) **Disable the automatic mount on the ServiceAccount**
-
-   ```bash
-   kubectl patch serviceaccount dashboard-sa -p '{"automountServiceAccountToken": false}'
-   ```
-
-   Alternatively, run `kubectl edit serviceaccount dashboard-sa` and add the field at the top level of the manifest, at the same level as `apiVersion` and `kind` (a `ServiceAccount` has no `spec`):
-
-   ```yaml
-   apiVersion: v1
-   automountServiceAccountToken: false
-   kind: ServiceAccount
-   metadata:
-     name: dashboard-sa
-     namespace: default
-   ```
-
-   This change does not affect the Pods that are already running, because the token is mounted (or not) only when a Pod is created:
-
-   ```console
-   $ kubectl exec deploy/web-dashboard -- ls /var/run/secrets/kubernetes.io/serviceaccount
-   ca.crt
-   namespace
-   token
-   ```
-
-   A Pod created from now on with the current Pod template (for example after `kubectl rollout restart deployment web-dashboard`), instead, would not even have the `/var/run/secrets/kubernetes.io/serviceaccount` directory.
-
-4) **Mount the token with a projected volume**
-
-   There is no imperative command to add a volume, so you have to edit the manifest of the Deployment (the `web-dashboard.yaml` file of step 1, or the live object with `kubectl edit deployment web-dashboard`).  
-   In the Pod template (`spec.template.spec`):
-
-   - set `serviceAccountName: dashboard-sa`: the file of step 1 does not contain it, because in step 2 the ServiceAccount was changed only in the live object, with `kubectl set serviceaccount`;
-   - set `automountServiceAccountToken: false` also at Pod level, so that the Pod no longer depends on the configuration of the ServiceAccount;
-   - define a projected volume named `token` with a `serviceAccountToken` source;
-   - mount the volume read-only in the container, at the standard path `/var/run/secrets/kubernetes.io/serviceaccount`, where applications and Kubernetes client libraries look for the token (the file will be `/var/run/secrets/kubernetes.io/serviceaccount/token`).
-
-   ```yaml
-   apiVersion: apps/v1
-   kind: Deployment
-   metadata:
-     name: web-dashboard
-     namespace: default
-     labels:
-       name: web-dashboard
-   spec:
-     replicas: 1
-     selector:
-       matchLabels:
-         name: web-dashboard
-     template:
-       metadata:
-         labels:
-           name: web-dashboard
-       spec:
-         serviceAccountName: dashboard-sa     # the token is issued for this ServiceAccount
-         automountServiceAccountToken: false  # no automatic kube-api-access-xxxxx volume
-         containers:
-         - name: web-dashboard
-           image: nginx:1.28
-           ports:
-           - containerPort: 80
-           volumeMounts:
-           - name: token                      # must match the name of the volume
-             mountPath: /var/run/secrets/kubernetes.io/serviceaccount
-             readOnly: true
-         volumes:
-         - name: token
-           projected:
-             sources:
-             - serviceAccountToken:
-                 path: token                  # name of the file inside mountPath
-   ```
-
-   ```console
-   $ kubectl apply -f web-dashboard.yaml
-   Warning: resource deployments/web-dashboard is missing the kubectl.kubernetes.io/last-applied-configuration annotation which is required by kubectl apply. kubectl apply should only be used on resources created declaratively by either kubectl create --save-config or kubectl apply. The missing annotation will be patched automatically.
-   deployment.apps/web-dashboard configured
-   ```
-
-   Projected volumes are always mounted read-only (like Secret and ConfigMap volumes), but `readOnly: true` makes it explicit.
-
-   > [!TIP]
-   >
-   > When an object was created with `kubectl create` (like the Deployment of step 1), `kubectl apply` prints the warning above about the missing `kubectl.kubernetes.io/last-applied-configuration` annotation.  
-   > It is harmless: `kubectl apply` uses that annotation to remember the configuration applied the last time, and adds it automatically.  
-   > The only side effect is that, in this first `apply`, the fields that are in the live object but not in the file are not removed: if you deleted something from the file, use `kubectl replace -f <file-name>` instead.
-
-5) **Verify**
-
-   ```console
-   $ kubectl rollout status deployment web-dashboard
-   deployment "web-dashboard" successfully rolled out
-
-   $ kubectl exec deploy/web-dashboard -- ls /var/run/secrets/kubernetes.io/serviceaccount
-   token
-   ```
-
-   As in step 2, make sure that the old Pod has disappeared before running `kubectl exec`, because the old Pods still have the automatic mount.  
-
-   > [!TIP]
-   >
-   > `kubectl exec deploy/web-dashboard` runs the command in a Pod of the Deployment, and is a shorter version compared to retrieving the pod with `kubectl exec $(kubectl get pod -l name=web-dashboard -o jsonpath='{.items[0].metadata.name}') -- ...`, where `$(...)` returns the name of the first Pod with the label `name=web-dashboard`.
-
-   This time the directory contains only the `token` file, because the projected volume has only the `serviceAccountToken` source.  
-   The manually mounted token works exactly like the automatic one: the Pod still authenticates as `dashboard-sa` and can list the Pods.
-
-   ```console
-   $ kubectl exec deploy/web-dashboard -- sh -c 'curl -sk -w "\n" \
-       -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
-       https://kubernetes.default.svc/api/v1/namespaces/default/pods'
-   {
-     "kind": "PodList",
-     "apiVersion": "v1",
-     ...
-   ```
-
-   This is enough for our `curl`, which skips the verification of the certificate (`-k`), but many applications (and the Kubernetes client libraries, when they use the in-cluster configuration) also expect the `ca.crt` file in the same directory, to verify the TLS certificate of the API server: for example, `curl --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt ...` would now fail with error 77 (the CA certificate file cannot be read).  
-   In that case, add to the same projected volume the `configMap` source (and, if needed, the `downwardAPI` one) of the `kube-api-access-xxxxx` volume shown above.
-
-   `kubectl describe pod` also shows the `token` volume instead of `kube-api-access-xxxxx`:
-
-   ```text
-       Mounts:
-         /var/run/secrets/kubernetes.io/serviceaccount from token (ro)
-   ```
-
-6) **Rollback**
-
-   To go back to the initial situation (for example to repeat the procedure), delete the Deployment and remove the field from the ServiceAccount: otherwise, the Pods that you create from now on with `dashboard-sa` (like `my-kubernetes-dashboard` of the previous sections) will not receive the token.
-
-   ```bash
-   kubectl delete deployment web-dashboard
-   kubectl patch serviceaccount dashboard-sa -p '{"automountServiceAccountToken": null}'
-   ```
-
-   In a patch, setting a field to `null` removes it.
-
-> [!NOTE]
->
-> The `serviceAccountToken` source accepts two more optional fields:
->
-> ```yaml
->       volumes:
->       - name: token
->         projected:
->           sources:
->           - serviceAccountToken:
->               path: token
->               expirationSeconds: 1800 # requested validity: default 3600, minimum 600
->               audience: vault         # intended recipient: default is the Kubernetes API server
-> ```
->
-> - `expirationSeconds`: unlike the token of the automatic volume, a manually projected token is not extended to one year, so it really lasts only the requested time. The kubelet rotates it before it expires (when it is older than 80% of its validity, or older than 24 hours), so the application must re-read the file periodically (recent versions of the official Kubernetes client libraries do it automatically);
-> - `audience`: a token issued for a different audience is **not** accepted by the Kubernetes API server (which answers `401 Unauthorized`): it is meant for another service (for example HashiCorp Vault), which checks that the token was issued for it.
->
-> In any case, the token is bound to the Pod: it becomes invalid as soon as the Pod is deleted.
-
-To sum up:
-
-|                | Automatic mount (default)                                  | Manual mount                                             |
-| -------------- | ---------------------------------------------------------- | -------------------------------------------------------- |
-| Configuration  | nothing to do                                              | `automountServiceAccountToken: false` + projected volume |
-| Volume         | `kube-api-access-xxxxx`, added by the admission controller | defined by you in the Pod `spec`                         |
-| Containers     | all the containers of the Pod                              | only those with the `volumeMount`                        |
-| Files          | `token`, `ca.crt`, `namespace`                             | only the sources you add                                 |
-| Token validity | 1 hour, extended by default to 1 year                      | `expirationSeconds` (default 1 hour)                     |
-
----
-
-### Evolution of ServiceAccount tokens
-
-Service account tokens have evolved over time.
-
-Prior to Kubernetes v1.24, creating a ServiceAccount automatically created a Secret containing a long-lived token.  
-The Secret name appeared in the `secrets` field of the ServiceAccount (shown as `Tokens` in the output of `kubectl describe serviceaccount`).  
-In that case, you could directly mount the Secret (containing the token) as a volume of a Pod.
-
-In Kubernetes v1.21 and earlier, that default token was not time bound (so it did not have an expiration and was valid as long as the Service Account existed) and was not audience bound.  
-Starting with Kubernetes v1.22, Pods use short-lived, audience-bound, object-bound ServiceAccount tokens obtained through the TokenRequest API and projected into the Pod. This was made as part of the enhancement proposal KEP-1205, which introduced a more secure and scalable mechanism for provisioning ServiceAccount tokens.  
-Tokens generated through this API are:
-
-- time bound
-- audience bound
-- object bound
-
-This makes ServiceAccount tokens significantly more secure.  
-Instead of mounting a `Secret` containing a long-lived token, Kubernetes now obtains a short-lived token through the TokenRequest API and projects it directly into the Pod.
-
-Starting from Kubernetes v1.24, Kubernetes stopped automatically creating long-lived token Secrets when a ServiceAccount is created.  
-This was introduced by KEP-2799: "Reduction of Secret-based Service Account Tokens".  
-If you need a token outside a Pod (for example, for an external application or a CI/CD tool), you can run the command `kubectl create token dashboard-sa`; the token will be printed to the screen (by default it is valid for one hour, which you can change with `--duration`).
-
-| Version | Behavior                                                               |
-| ------- | ---------------------------------------------------------------------- |
-| ≤1.21   | Long-lived ServiceAccount tokens were automatically created in Secrets |
-| 1.22    | Bound ServiceAccount tokens became the default for Pods                |
-| ≥1.24   | Long-lived token Secrets are no longer automatically created           |
-
-If a long-lived token is needed nowadays, similar to the legacy behavior, it can still be created using a `Secret` of type `kubernetes.io/service-account-token`.  
-In this case we need to specify the name of the `ServiceAccount` in the `kubernetes.io/service-account.name` annotation (under `metadata.annotations`).
-
-```yaml
-apiVersion: v1
-kind: Secret
-type: kubernetes.io/service-account-token
-metadata:
-  name: mysecretname
-  annotations:
-    kubernetes.io/service-account.name: dashboard-sa
-```
-
-> [!CAUTION]
->
-> According to the Kubernetes documentation, a service-account-token Secret object should only be created if
->
-> - we cannot use the `TokenRequest` API to obtain a token and;
-> - the security exposure of persisting a non-expiring token credential is acceptable.
-
-Some commands:
-
-- `kubectl create serviceaccount dashboard-sa`: creates a ServiceAccount inside the default namespace;
-- `kubectl get serviceaccount`: list the ServiceAccounts inside the default namespace;
-- `kubectl describe serviceaccount dashboard-sa`: gives details of a ServiceAccount inside the default namespace;
-- `kubectl create token dashboard-sa`: generate a short-lived token for a ServiceAccount.
-
----
-
-## Taints and Tolerations
-
-Taints and Tolerations affect the relationship between Pods and nodes.
-
-- Taints are set on nodes and act as a repellent to Pods;
-- Tolerations are set on Pods and allow (but do not force) them to be scheduled onto nodes with matching taints.
-
-By default, Pods have no tolerations (apart from two added automatically, see the note at the end of this section); therefore, the scheduler will not place a Pod onto a node with a `NoSchedule` or `NoExecute` taint that the Pod does not tolerate (a `PreferNoSchedule` taint is only avoided when possible).
-
-To define a taint on a node, run the following command
-
-```bash
-kubectl taint nodes <node-name> <key>[=<value>]:<taint-effect>
-```
-
-The taint effects are:
-
-- `NoSchedule`: the Pod will not be scheduled on the node;
-- `PreferNoSchedule`: the system will try to avoid placing a Pod on a node (but is not guaranteed);
-- `NoExecute`: new Pods will not be scheduled on the node, and any existing Pods that do not tolerate the taint will be evicted.
-
-For example
-
-```bash
-kubectl taint nodes node1 key1=value1:NoSchedule
-```
-
-places a taint on node `node1`. The taint has key `key1`, value `value1`, and taint effect `NoSchedule`. This means that no Pod will be scheduled onto `node1` unless it has a matching toleration.
-
-> [!TIP]
->
-> Control plane nodes can run Pods, but they are commonly configured with a `NoSchedule` taint so that ordinary application Pods are not scheduled onto them unless they tolerate the taint.
->
-> ```console
-> $ kubectl describe node controlplane | grep Taint
-> Taints:             node-role.kubernetes.io/control-plane:NoSchedule
-> ```
->
-> In many clusters, application workloads are kept separate from control plane nodes to reserve those nodes for control plane components.
-
-You can then specify a toleration for a Pod in the Pod `spec`.  
-Both of the following tolerations "match" the taint created by the `kubectl taint` command above, and thus a Pod with either toleration would be scheduled onto `node1`:
-
-```yaml
-tolerations:
-- key: "key1"
-  operator: "Equal"
-  value: "value1"
-  effect: "NoSchedule"
-```
-
-```yaml
-tolerations:
-- key: "key1"
-  operator: "Exists"
-  effect: "NoSchedule"
-```
-
-To remove the taint added by the command above, you can run:
-
-```bash
-kubectl taint nodes node1 key1=value1:NoSchedule-
-```
-
-> [!TIP]
->
-> For a `NoExecute` toleration, you can also specify `tolerationSeconds` to define how long a Pod may remain on the node before being evicted. For example:
->
-> ```yaml
-> tolerations:
-> - key: "key1"
->   operator: "Equal"
->   value: "value1"
->   effect: "NoExecute"
->   tolerationSeconds: 3600
-> ```
->
-> This means that the Pod can remain on the node for up to 3600 seconds after the matching NoExecute taint is added. After that time, the Pod will be evicted.
-
-The default Kubernetes scheduler takes taints and tolerations into account when selecting a node to run a particular Pod.  
-However, if you manually specify `.spec.nodeName` for a Pod, the Pod bypasses the scheduler and is bound directly to the specified node, even if that node has a `NoSchedule` taint.  
-Then, if the node has a `NoExecute` taint that the Pod does not tolerate, the Pod will be evicted.
-
-> [!IMPORTANT]
->
-> A toleration does **not** instruct Kubernetes to schedule a Pod onto a tainted node.  
-> It only allows the Pod to be scheduled there.  
-> The scheduler may still choose another node.
-
-Here's an example of a Pod that has some tolerations defined:
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx
-  labels:
-    env: test
-spec:
-  containers:
-  - name: nginx
-    image: nginx
-    imagePullPolicy: IfNotPresent
-  tolerations:
-  - key: "example-key"
-    operator: "Exists"
-    effect: "NoSchedule"
-```
-
-The default value for `operator` is `Equal`.
-
-A toleration "matches" a taint if the keys and the effects are the same, and:
-
-- the `operator` is `Exists` (in which case no value should be specified), or
-- the `operator` is `Equal` and the values are equal.
-
-There are two special cases:
-
-- if the `key` is empty, then the `operator` must be `Exists`, which matches all keys and values. Note that the `effect` still needs to be matched;
-- an empty `effect` matches all effects for that key.
-
-> [!NOTE]
->
-> Every Pod automatically receives two tolerations (added by the `DefaultTolerationSeconds` admission controller), which you can see with `kubectl describe pod`:
->
-> ```text
-> Tolerations:  node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
->               node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
-> ```
->
-> This is why the Pods running on a node that becomes not ready or unreachable are evicted after about 5 minutes.
-
----
-
-## Node Selectors and Node Affinity
-
-To assign a Pod to a particular node using Node Selectors, we need to:
-
-- label the node with `kubectl label nodes <node-name> <label-key>=<label-value>`;
-- specify selectors inside the section `spec.nodeSelector` of the pod.
-
-```bash
-kubectl label nodes node-1 size=Large
-kubectl label nodes node-1 zone=EU
-```
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx
-spec:
-  containers:
-  - name: nginx
-    image: nginx
-  nodeSelector:
-    size: Large
-    zone: EU
-```
-
-> [!TIP]
->
-> NodeSelector supports only exact label matching (logical AND).  
-> More complex expressions, like:
->
-> - place the Pod on a large or medium node;
-> - place the Pod on any node that is not small;
->
-> require Node Affinity.
-
-The Node Affinity functionality offers advanced features to ensure that Pods are hosted on particular nodes.
-
-The following example does the same as the previous one specified with `nodeSelector`
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: nginx
-spec:
-  containers:
-  - name: nginx
-    image: nginx
-  affinity:
-    nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-        - matchExpressions:
-          - key: size
-            operator: In
-            values:
-            - Large
-          - key: zone
-            operator: In
-            values:
-            - EU
-```
-
-There are currently two types of node affinity:
-
-- `requiredDuringSchedulingIgnoredDuringExecution`: the scheduler can't schedule the Pod unless the rule is met. This works like `nodeSelector`, but with a more expressive syntax;
-- `preferredDuringSchedulingIgnoredDuringExecution`: the scheduler tries to find a node that meets the rule. If a matching node is not available, the scheduler still schedules the Pod.
-
-> [!NOTE]
->
-> In the preceding types, `IgnoredDuringExecution` means that if the node labels change after Kubernetes schedules the Pod, the Pod continues to run.
-
-The `preferred` type has a different structure: instead of `nodeSelectorTerms`, it takes a list of preferences, each with a `weight` (from 1 to 100) that the scheduler adds to the score of the nodes matching it.
-
-```yaml
-  affinity:
-    nodeAffinity:
-      preferredDuringSchedulingIgnoredDuringExecution:
-      - weight: 1
-        preference:
-          matchExpressions:
-          - key: size
-            operator: In
-            values:
-            - Large
-```
-
-Inside `nodeSelectorTerms[*].matchExpressions` you define the key-value pairs in the form key - operator - value.
-
-The types of operators are:
-
-- `In`: The label value is present in the supplied set of strings;
-- `NotIn`: The label value is not contained in the supplied set of strings;
-- `Exists`: A label with this key exists on the object;
-- `DoesNotExist`: No label with this key exists on the object;
-- `Gt` / `Lt`: The label value, interpreted as an integer, is greater / less than the supplied value.
-
-> [!NOTE]
->
-> Multiple `nodeSelectorTerms` are combined with a logical **OR** (the node must satisfy at least one term), while multiple expressions inside the same `matchExpressions` are combined with a logical **AND** (the node must satisfy all of them).
-
-If you want to also allow the Pod to be placed on a node labeled with Medium, you can just add it to the `values` list
-
-```yaml
-        - matchExpressions:
-          - key: size
-            operator: In
-            values:
-            - Large
-            - Medium
-```
-
-If, instead, you want to prevent the Pod from being placed on a node labeled with Small, you can use the following syntax
-
-```yaml
-        - matchExpressions:
-          - key: size
-            operator: NotIn
-            values:
-            - Small
-```
-
-And now for an example using the `Exists` operator: assuming that Medium and Large nodes are labeled while small nodes aren't, the following example gives the same result.
-
-```yaml
-        - matchExpressions:
-          - key: size
-            operator: Exists
-```
-
-In this last case we don't need the value set because the `Exists` operator does not compare the values (in fact, with `Exists` and `DoesNotExist` the `values` field must not be specified).
-
-| Feature              | nodeSelector       | nodeAffinity       |
-| -------------------- | ------------------ | ------------------ |
-| Equality match       | :white_check_mark: | :white_check_mark: |
-| OR conditions        | :x:                | :white_check_mark: |
-| NOT conditions       | :x:                | :white_check_mark: |
-| Preferred scheduling | :x:                | :white_check_mark: |
-
-> [!TIP]
->
-> Taints/tolerations and node affinity solve opposite problems: taints keep unwanted Pods away from a node, while node affinity attracts Pods to specific nodes.  
-> To dedicate some nodes to specific Pods, combine both: taint the nodes (so that other Pods cannot land there) and give the Pods a matching toleration plus a node affinity (so that they can land only there).
-
----
-
-## Multi-Container Pods and InitContainers
-
-A Pod can contain more than one container.  
-All containers in the same Pod:
-
-- share the same network namespace (so they can communicate with each other via `localhost`);
-- share the same IP address;
-- can share volumes;
-- regular (co-located) containers in a Pod also share the same lifecycle, while init containers and sidecar containers can have a different lifecycle.
-
-There are different patterns of multi-container pods:
-
-- co-located containers: the services are dependent on each other and share their entire lifecycle inside the Pod;
-- init containers: there are initialization steps to be performed when the Pod starts (for example waiting for a DB to be ready or pulling code or a binary from a repository that will be used by the main web application);
-- sidecar container: the sidecar starts before the main application container and keeps running alongside it, terminating only after the main container stops (for example a log shipper).
-
-With co-located containers, there is no guarantee that one container starts before another.
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: simple-webapp
-  labels:
-    name: simple-webapp
-spec:
-  containers:
-  - name: web-app
-    image: web-app
-    ports:
-    - containerPort: 8080
-  - name: main-app
-    image: main-app
-```
-
-Using the `initContainers` field, you can also define more than one init container; in that case each init container runs one at a time, in sequential order.  
-In the following example, `db-checker` runs first and then ends; then `api-checker` runs and ends; finally, the main application runs.
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: simple-webapp
-  labels:
-    name: simple-webapp
-spec:
-  containers:
-  - name: web-app
-    image: web-app
-    ports:
-    - containerPort: 8080
-  initContainers:
-  - name: db-checker
-    image: busybox
-    command: ["sh","-c","wait-for-db-to-start.sh"]
-  - name: api-checker
-    image: busybox
-    command: ["sh","-c","wait-for-another-api.sh"]
-```
-
-If any of the init containers fails, Kubernetes restarts that specific init container repeatedly until it succeeds, before moving on to the next one (unless the Pod has `restartPolicy: Never`: in that case the whole Pod is marked as failed).
-
-In order to achieve the sidecar container pattern, you need to add `restartPolicy: Always` to the specific init container's own definition (not to the Pod's `spec.restartPolicy`, which is a different setting). This ensures the init container will continue to run and will be terminated only after the main application stops (in this way the log shipper can catch the startup and termination logs of the main container).  
-Unlike regular init containers, a sidecar does not have to complete: as soon as it has started, Kubernetes moves on to the next init container and then starts the main containers.  
-These native sidecar containers are stable since Kubernetes v1.33.
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: simple-webapp
-  labels:
-    name: simple-webapp
-spec:
-  containers:
-  - name: simple-app
-    image: simple-app
-    ports:
-    - containerPort: 8080
-    volumeMounts:
-    - mountPath: /log
-      name: log-volume
-  initContainers:
-  - name: log-shipper
-    image: filebeat
-    volumeMounts:
-    - name: log-volume
-      mountPath: /var/log/event-simulator/
-    restartPolicy: Always
-  volumes:
-  - name: log-volume
-    emptyDir: {}
-```
-
----
-
-## Observability
-
-### Pod Status, Pod Phases and Pod Conditions
-
-Every Pod has a `status` field (a `PodStatus` object) that contains information about the current state of the Pod, including:
-
-- the Pod phase;
-- the Pod conditions;
-- container statuses;
-- IP addresses;
-- start time;
-- and other runtime information.
-
-You can get details about the Pod Status with the command `kubectl describe pod <pod name>`, or see the whole `status` section with `kubectl get pod <pod name> -o yaml`.
-
-```text
-Pod
- │
- └── status (PodStatus)
-      │
-      ├── phase
-      │     ├── Pending
-      │     ├── Running
-      │     ├── Succeeded
-      │     ├── Failed
-      │     └── Unknown
-      │
-      ├── conditions
-      │     ├── PodScheduled
-      │     ├── PodReadyToStartContainers
-      │     ├── Initialized
-      │     ├── ContainersReady
-      │     └── Ready
-      │
-      ├── reason / message          (e.g. Evicted)
-      ├── podIP
-      ├── startTime
-      ├── hostIP
-      ├── initContainerStatuses
-      └── containerStatuses
-            ├── state               (current state of the container)
-            │     ├── waiting       (reason: ContainerCreating, CrashLoopBackOff, ...)
-            │     ├── running
-            │     └── terminated    (reason: Completed, Error, OOMKilled, ... + exitCode)
-            └── lastState           (previous termination, useful after a restart)
-```
-
-The phase of a Pod is a simple, high-level summary of where the Pod is in its lifecycle:
-
-- `Pending`: the Pod has been accepted by the Kubernetes cluster, but one or more of the containers has not been set up and made ready to run. This includes the time a Pod spends waiting to be scheduled as well as the time spent downloading container images over the network;
-- `Running`: the Pod has been bound to a node, and all of the containers have been created. At least one container is still running, or is in the process of starting or restarting;
-- `Succeeded`: all containers in the Pod have terminated successfully, and will not be restarted;
-- `Failed`: all containers in the Pod have terminated, and at least one container has terminated in failure. That is, the container either exited with non-zero status or was terminated by the system, and is not set for automatic restarting;
-- `Unknown`: for some reason the state of the Pod could not be obtained. This usually indicates a communication problem between the control plane and the node where the Pod should be running. Note that this phase is deprecated: Kubernetes has not set it since 2015.
-
-> [!TIP]
->
-> The `STATUS` column displayed by `kubectl get pods` is not a field of the Pod and does not always correspond to the Pod phase: it's a "user-friendly" summary computed by the API server (kubectl just prints it).  
-> It starts from the phase and then replaces it with more specific information, when available, in this order (each step overrides the previous one):
->
-> 1) the reason of the Pod (`status.reason`, e.g. `Evicted`);
-> 2) the state of the init containers (e.g. `Init:0/1`, `Init:Error`);
-> 3) the reason why a container is `waiting` (e.g. `ContainerCreating`, `CrashLoopBackOff`) or has `terminated` (e.g. `Completed`, `Error`, `OOMKilled`);
-> 4) `Terminating`, if the Pod is being deleted and its phase is not `Succeeded` or `Failed` yet.
->
-> For example, sometimes you receive `ContainerCreating`, which is the **Waiting Reason** of a container, not a Pod phase.  
-> It typically appears after the Pod has been scheduled, while Kubernetes is pulling container images, creating the Pod sandbox, configuring networking, mounting volumes and starting the containers.  
-> During this time, the Pod phase is still `Pending`.
->
-> ```console
-> $ kubectl get pod nginx
-> NAME    READY   STATUS              RESTARTS   AGE
-> nginx   0/1     ContainerCreating   0          3s
-> ```
->
-> ```console
-> $ kubectl describe pod nginx
-> ...
-> Status:           Pending
-> ...
-> Containers:
->   nginx:
->     ...
->     State:          Waiting
->       Reason:       ContainerCreating
->     Ready:          False
->     Restart Count:  0
-> ...
-> ```
->
-> To print only the phase, use `kubectl get pod nginx -o jsonpath='{.status.phase}'`.
-
-The following table shows the most common values of `STATUS` for each phase:
-
-| Pod phase            | STATUS shown by `kubectl get pods`    | Meaning                                                                                                                                                                                      |
-| -------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Pending`            | `Pending`                             | the Pod has not been scheduled yet (e.g. no node has enough resources or matches its `nodeSelector` or affinity, or all the nodes have taints that the Pod does not tolerate)                |
-| `Pending`            | `ContainerCreating`                   | the Pod has been scheduled and Kubernetes is preparing it (sandbox, network, volumes, image pull); if it lasts long, check the events (e.g. a Secret mounted as a volume does not exist)     |
-| `Pending`            | `ErrImagePull`, `ImagePullBackOff`    | the image cannot be pulled (wrong name or tag, registry not reachable, missing credentials); with `ImagePullBackOff` the kubelet waits before trying again                                   |
-| `Pending`            | `CreateContainerConfigError`          | a ConfigMap or Secret (or one of its keys) used in `env` or `envFrom` does not exist                                                                                                         |
-| `Pending`            | `Init:0/1`                            | the init containers are running (in this case, 0 of 1 have completed)                                                                                                                        |
-| `Pending`            | `Init:Error`, `Init:CrashLoopBackOff` | an init container failed and is going to be restarted                                                                                                                                        |
-| `Pending`            | `PodInitializing`                     | the init containers have completed and the app containers are starting                                                                                                                       |
-| `Running`            | `Running`                             | the containers are running (the `READY` column shows if they are also ready)                                                                                                                 |
-| `Running`            | `CrashLoopBackOff`                    | a container keeps terminating: the kubelet restarts it, waiting longer and longer between restarts (up to 5 minutes)                                                                         |
-| `Running`            | `Error`, `OOMKilled`, `Completed`     | a container has just terminated (with an error, killed for exceeding its memory limit, or with exit code 0) and is going to be restarted; if it happens again, it becomes `CrashLoopBackOff` |
-| `Running`            | `NotReady`                            | in a Pod with several containers, one container has completed and another one is still running, but the Pod is not ready                                                                     |
-| `Running`, `Pending` | `Terminating`                         | the Pod is being deleted (`metadata.deletionTimestamp` is set) and its containers are being stopped, within the grace period                                                                 |
-| `Succeeded`          | `Completed`                           | all the containers terminated with exit code 0 and will not be restarted (e.g. the Pods of a Job)                                                                                            |
-| `Failed`             | `Error`, `OOMKilled`                  | a container terminated with an error, or was killed for exceeding its memory limit, and will not be restarted (`restartPolicy: Never`)                                                       |
-| `Failed`             | `Init:Error`                          | an init container failed and will not be restarted (`restartPolicy: Never`)                                                                                                                  |
-| `Failed`             | `Error`                               | also an evicted Pod (e.g. it exceeded its `ephemeral-storage` limit): the reason `Evicted` is shown only by `kubectl describe pod`                                                           |
-| `Unknown`            | `Unknown`                             | deprecated phase: when a node stops responding, its Pods keep their last phase (usually `Running`)                                                                                           |
-
-Note that `Error`, `OOMKilled` and `Completed` can appear both while the Pod is `Running` (the container is going to be restarted) and when the Pod is in a final phase (`Succeeded` or `Failed`): the `RESTARTS` column and the `restartPolicy` of the Pod tell you which case it is.  
-For example, a Deployment whose container simply runs a command and exits shows `Completed` and then `CrashLoopBackOff`, because the Pods of a Deployment always have `restartPolicy: Always`.
-
-Moreover, right before a deleted Pod disappears, the kubelet moves it to a final phase (`Succeeded` or `Failed`): so, after `Terminating`, you may briefly see `Completed` or `Error`.
-
-The Pod's status also includes an array of `conditions`, which indicate whether the Pod has passed certain checkpoints.  
-Each condition has a `type` and a `status`, which can be `True`, `False` or `Unknown` (and, optionally, a `reason`, a `message` and the time of the last transition).  
-As a Pod progresses through its lifecycle, these conditions are set roughly in this order (the first one when the Pod is bound to a node by the scheduler, the others by the kubelet):
-
-- `PodScheduled`: the Pod has been scheduled on a node;
-- `PodReadyToStartContainers`: the Pod sandbox has been successfully created and networking configured. The sandbox and network are set up by the container runtime and CNI plugin;
-- `Initialized`: all init containers have completed successfully (for a Pod without init containers, this is set to `True` before sandbox creation);
-- `ContainersReady`: all containers in the Pod are ready;
-- `Ready`: the Pod is able to serve requests and should be added to the load balancing pools of all matching Services.
-
-Not every Pod will necessarily expose all conditions, depending on the Kubernetes version and enabled features.
-
-When running `kubectl describe pod <pod name>`, the Pod Conditions appear like this:
-
-```text
-Conditions:
-  Type                        Status
-  PodReadyToStartContainers   True
-  Initialized                 True
-  Ready                       True
-  ContainersReady             True
-  PodScheduled                True
-```
-
-Here is the sequence a Pod goes through, from its creation until it is ready, with the corresponding phase:
-
-```text
-                                       phase
-Pod created                            Pending
-     │
-     ▼
-PodScheduled = True                    Pending    (the scheduler has assigned the Pod to a node)
-     │
-     ▼
-PodReadyToStartContainers = True       Pending    (sandbox and network are ready)
-     │
-     ▼
-Initialized = True                     Pending    (all the init containers have completed)
-     │
-     ▼
-containers started                     Running
-     │
-     ▼
-ContainersReady = True                 Running    (all the containers are ready)
-     │
-     ▼
-Ready = True                           Running    (the Pod receives traffic from the Services)
-```
-
-Note that the phase becomes `Running` as soon as the containers have started, before they are ready: a Pod can be `Running` but not ready (`READY 0/1` in the output of `kubectl get pods`).
-
-Without a readiness probe, Kubernetes considers a container ready as soon as it starts, so `ContainersReady` and `Ready` become `True` immediately and the Services may begin routing traffic to an application that is still initializing.  
-However, many applications need additional time to initialize before they are actually ready to serve requests.  
-Readiness probes solve this problem by tying the Pod's `Ready` condition to the actual readiness of the application: for example, with a readiness probe with `initialDelaySeconds: 10`, the Pod stays `Running` but not ready for at least 10 seconds.
-
----
-
-### Readiness, Liveness and Startup Probes
-
-As a developer of the application, you know best what it means for the application to be ready.
-
-You can tell Kubernetes how to check whether the application inside a container is actually ready by adding a `readinessProbe` to the definition of the container (probes are defined per container, in `spec.containers[*]`).  
-There are different ways to probe the application:
-
-- calling an API over HTTP, in the case of a web application: the probe succeeds if the response status code is between 200 and 399;
-
-  ```yaml
-      readinessProbe:
-        httpGet:
-          path: /api/ready
-          port: 8080
-  ```
-
-- checking that a particular TCP port accepts connections, for example for a database;
-
-  ```yaml
-      readinessProbe:
-        tcpSocket:
-          port: 3306
-  ```
-
-- executing a command inside the container (for example a custom script): the probe succeeds if the command exits with code 0.
-
-  ```yaml
-      readinessProbe:
-        exec:
-          command:
-          - sh
-          - -c
-          - test -f /app/is_ready
-  ```
-
-There is also a `grpc` probe, for applications that implement the gRPC Health Checking Protocol.
-
-Until the `readinessProbe` succeeds, the Pod is not ready and the Services do not forward any traffic to it.  
-The readiness probe keeps running for the whole life of the container: if it fails later (for `failureThreshold` consecutive times), the Pod is marked as not ready again and removed from the endpoints of the Services, but the container is **not** restarted; as soon as the probe succeeds again, the Pod receives traffic again.
-
-There are other options, like:
-
-- `initialDelaySeconds`: the number of seconds to wait after the container has started before running the first probe (for example if you know that the application takes a minimum amount of time to warm up); 0 by default;
-- `periodSeconds`: how often (in seconds) to run the probe; 10 by default;
-- `timeoutSeconds`: the number of seconds after which the probe times out, counting as a failure; 1 by default;
-- `failureThreshold`: the number of consecutive failures after which Kubernetes considers the probe failed; 3 by default;
-- `successThreshold`: the number of consecutive successes, after a failure, needed to consider the probe successful again; 1 by default (and it must be 1 for liveness and startup probes).
-
-```yaml
-apiVersion: v1
-kind: Pod
-metadata:
-  name: simple-webapp
-  labels:
-    name: simple-webapp
-spec:
-  containers:
-  - name: simple-app
-    image: simple-app
-    ports:
-    - containerPort: 8080
-    readinessProbe:
-      httpGet:
-        path: /api/ready
-        port: 8080
-      initialDelaySeconds: 10
-      periodSeconds: 5
-      failureThreshold: 8
-```
-
-Readiness probes are particularly useful when there are multiple Pods behind a Service.  
-For example, when you have a ReplicaSet (or a Deployment) with multiple Pods, the Service routes traffic only to the ready Pods.  
-They are also important during a rolling update: a Deployment considers a new Pod available only when it is ready, so it does not remove the old Pods until the new ones can actually serve requests.
-
-A liveness probe can be configured on a container to periodically test whether the application in the container is healthy: for example, to detect an application stuck in a deadlock, whose process is still running but no longer works.  
-If the probe fails (for `failureThreshold` consecutive times), the kubelet kills the container, which is then restarted according to the `restartPolicy` of the Pod: the `RESTARTS` column increases and the events show `Container <name> failed liveness probe, will be restarted`.  
-Again, as a developer of the application, you must define what it means for the application to be healthy.
-
-```yaml
-      livenessProbe:
-        exec:
-          command:
-          - sh
-          - /app/is_healthy.sh
-```
-
-Similarly to readiness probes, we have:
-
-- `httpGet` option for API, `tcpSocket` for port, `exec` for commands (and `grpc`);
-- `initialDelaySeconds`, `periodSeconds`, `timeoutSeconds` and `failureThreshold` options.
-
-Some applications take a long time to start: a liveness probe with the usual timings could kill them before they have finished starting, while a liveness probe with a long `initialDelaySeconds` would detect real problems late.  
-For these applications, you can add a `startupProbe`: as long as it has not succeeded, the liveness and readiness probes are not run; once it succeeds, it is no longer run and the other probes take over.  
-If the startup probe does not succeed within `failureThreshold` × `periodSeconds` seconds, the container is killed and restarted, as with a failed liveness probe.
-
-```yaml
-      startupProbe:
-        httpGet:
-          path: /healthz
-          port: 8080
-        failureThreshold: 30
-        periodSeconds: 10      # the application has up to 30 × 10 = 300 seconds to start
-      livenessProbe:
-        httpGet:
-          path: /healthz
-          port: 8080
-        periodSeconds: 10
-```
-
-> [!TIP]
->
-> | Probe type | Objective                 | If it fails                                                                           |
-> | ---------- | ------------------------- | ------------------------------------------------------------------------------------- |
-> | Readiness  | Can it receive traffic?   | the Pod is removed from the endpoints of the Services (no restart)                    |
-> | Liveness   | Should it be restarted?   | the container is killed and restarted                                                 |
-> | Startup    | Has it finished starting? | the container is killed and restarted (until it succeeds, the other probes don't run) |
-
----
-
-### Monitoring: logs, metrics and debugging
-
-Kubernetes provides several commands to inspect logs, monitor resource usage and troubleshoot applications.
-
-For the logs we can use `kubectl logs`, which shows what the containers write to their standard output and standard error.  
-In a Pod with several containers, by default it shows the logs of the first container (or of the one set with the `kubectl.kubernetes.io/default-container` annotation), and it prints which container it chose:
-
-```console
-$ kubectl logs webapp
-Defaulted container "app" out of: app, log-agent
-...
-```
-
-We can select a specific container using the `--container` or `-c` option, or retrieve the logs of all the containers of a Pod with the option `--all-containers` (adding `--prefix` to see which container each line comes from).
-
-For metrics, Kubernetes relies on the `Metrics Server`, an add-on component that is not installed by default in every cluster.  
-A single Metrics Server (a Deployment, usually in the `kube-system` namespace) serves the whole cluster.  
-The Metrics Server periodically retrieves resource usage metrics from the kubelets running on each node, aggregates them and exposes them through the Kubernetes Metrics API (`metrics.k8s.io`).  
-Each kubelet embeds `cAdvisor`, which collects CPU and memory usage statistics from the running containers.
-
-With Minikube we can enable it with the command `minikube addons enable metrics-server`.  
-For the other environments, you can run `kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml`.
-
-> [!NOTE]
->
-> Whether the Metrics Server is already installed depends on the environment: for example, in Minikube it's an addon that must be enabled, clusters created with kubeadm don't include it, while many managed Kubernetes services install it automatically.  
-> In test clusters whose kubelets use self-signed certificates, the Metrics Server may fail to connect to them: in that case, you can add the `--kubelet-insecure-tls` argument to its container (never in production).
-
-Once this component is running, you can see the current resource usage with the command `kubectl top node [node]` or `kubectl top pod [pod]`.
-
-```console
-$ kubectl top node
-NAME           CPU(cores)   CPU(%)   MEMORY(bytes)   MEMORY(%)
-controlplane   184m         1%       895Mi           1%
-node01         24m          0%       168Mi           0%
-```
-
-```console
-$ kubectl top pod
-NAME       CPU(cores)   MEMORY(bytes)
-elephant   13m          30Mi
-lion       1m           16Mi
-rabbit     104m         250Mi
-```
-
-Without the Metrics Server, these commands fail because the Metrics API is not available:
-
-```console
-$ kubectl top pod
-error: Metrics API not available
-```
-
-The Metrics Server provides **current resource usage** (CPU and memory) only, mainly for `kubectl top` and for the autoscalers (such as the Horizontal Pod Autoscaler).  
-It is **not** a full monitoring solution and does not store historical metrics, because it keeps metrics only in memory and does not persist them to disk.  
-For long-term monitoring and alerting, tools such as Prometheus and Grafana are typically used.
-
-> [!TIP]
->
-> A common troubleshooting workflow is:
->
-> 1. `kubectl get pods` (look at `STATUS`, `READY` and `RESTARTS`)
-> 2. `kubectl describe pod <pod>` (look at the state of the containers, the conditions and the `Events` at the bottom)
-> 3. `kubectl logs <pod>` (with `--previous` if the container has been restarted)
-> 4. `kubectl exec -it <pod> -- sh`
->
-> In many cases, these four commands are sufficient to identify the cause of a failing Pod.  
-> If the image has no shell (e.g. distroless images), you can add an ephemeral debug container to the running Pod with `kubectl debug -it <pod> --image=busybox --target=<container> --profile=general`: thanks to `--target`, the debug container shares the process namespace of that container, so it can see its processes.
-
-Useful commands:
-
-- `kubectl logs <pod>`: displays the logs of the (default) container of a Pod;
-- `kubectl logs -f <pod>`: streams the logs in real time (similar to `tail -f`);
-- `kubectl logs <pod> -c <container>`: displays the logs of a specific container in a multi-container Pod;
-- `kubectl logs <pod> --all-containers --prefix`: displays the logs of all the containers of a Pod, prefixing each line with its source;
-- `kubectl logs --previous <pod>` (or `-p`): displays the logs of the previous instance of the container, the one that terminated before the last restart (useful for troubleshooting `CrashLoopBackOff` or a container restarted by a liveness probe);
-- `kubectl logs <pod> --tail=20` / `--since=1h`: displays only the last 20 lines / the logs of the last hour;
-- `kubectl logs deploy/<deployment>`: displays the logs of a Pod of the Deployment (`--all-pods` for all of them);
-- `kubectl logs -l <label>=<value>`: displays the logs of the Pods with that label (by default, only the last 10 lines of each container);
-- `kubectl exec <pod> -- <command>`: executes a command inside a running container of a Pod (add `-it` for an interactive shell);
-- `kubectl describe <resource> <name>`: displays detailed information about a resource, including its configuration, status, conditions and events;
-- `kubectl events --for pod/<pod>`: displays the events of a Pod (`kubectl get events` displays all the events of the namespace);
-- `kubectl top pod`: displays the current CPU and memory usage of Pods (`--containers` for each container, `--sort-by=cpu` or `--sort-by=memory` to sort them);
-- `kubectl top node`: displays the current CPU and memory usage of Nodes;
-- `kubectl debug -it <pod> --image=<image> --target=<container>`: adds an ephemeral debug container to a running Pod.
-
----
-
-## Labels, Selectors and Annotations
+### 2.2 Labels, selectors and annotations
 
 Labels and selectors are the standard Kubernetes mechanism used to organize, identify and select objects.  
 Labels are key/value pairs attached to Kubernetes objects (in `metadata.labels`).  
@@ -2952,7 +982,265 @@ Useful commands:
 
 ---
 
-## Deployment Updates and Rollback
+### 2.3 Multi-container Pods and init containers
+
+A Pod can contain more than one container.  
+All containers in the same Pod:
+
+- share the same network namespace (so they can communicate with each other via `localhost`);
+- share the same IP address;
+- can share volumes;
+- regular (co-located) containers in a Pod also share the same lifecycle, while init containers and sidecar containers can have a different lifecycle.
+
+There are different patterns of multi-container pods:
+
+- co-located containers: the services are dependent on each other and share their entire lifecycle inside the Pod;
+- init containers: there are initialization steps to be performed when the Pod starts (for example waiting for a DB to be ready or pulling code or a binary from a repository that will be used by the main web application);
+- sidecar container: the sidecar starts before the main application container and keeps running alongside it, terminating only after the main container stops (for example a log shipper).
+
+With co-located containers, there is no guarantee that one container starts before another.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: simple-webapp
+  labels:
+    name: simple-webapp
+spec:
+  containers:
+  - name: web-app
+    image: web-app
+    ports:
+    - containerPort: 8080
+  - name: main-app
+    image: main-app
+```
+
+Using the `initContainers` field, you can also define more than one init container; in that case each init container runs one at a time, in sequential order.  
+In the following example, `db-checker` runs first and then ends; then `api-checker` runs and ends; finally, the main application runs.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: simple-webapp
+  labels:
+    name: simple-webapp
+spec:
+  containers:
+  - name: web-app
+    image: web-app
+    ports:
+    - containerPort: 8080
+  initContainers:
+  - name: db-checker
+    image: busybox
+    command: ["sh","-c","wait-for-db-to-start.sh"]
+  - name: api-checker
+    image: busybox
+    command: ["sh","-c","wait-for-another-api.sh"]
+```
+
+If any of the init containers fails, Kubernetes restarts that specific init container repeatedly until it succeeds, before moving on to the next one (unless the Pod has `restartPolicy: Never`: in that case the whole Pod is marked as failed).
+
+In order to achieve the sidecar container pattern, you need to add `restartPolicy: Always` to the specific init container's own definition (not to the Pod's `spec.restartPolicy`, which is a different setting). This ensures the init container will continue to run and will be terminated only after the main application stops (in this way the log shipper can catch the startup and termination logs of the main container).  
+Unlike regular init containers, a sidecar does not have to complete: as soon as it has started, Kubernetes moves on to the next init container and then starts the main containers.  
+These native sidecar containers are stable since Kubernetes v1.33.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: simple-webapp
+  labels:
+    name: simple-webapp
+spec:
+  containers:
+  - name: simple-app
+    image: simple-app
+    ports:
+    - containerPort: 8080
+    volumeMounts:
+    - mountPath: /log
+      name: log-volume
+  initContainers:
+  - name: log-shipper
+    image: filebeat
+    volumeMounts:
+    - name: log-volume
+      mountPath: /var/log/event-simulator/
+    restartPolicy: Always
+  volumes:
+  - name: log-volume
+    emptyDir: {}
+```
+
+---
+
+## Part 3 – Workload resources
+
+### 3.1 Controllers and reconciliation
+
+The behavior of many resources (like `Deployments`, `ReplicaSets` and `Jobs`) is implemented by controllers.  
+A controller continuously watches one or more resources and takes actions to make the actual state match the desired state.  
+The built-in controllers run inside the `kube-controller-manager` (for example `deployment-controller`, `replicaset-controller`, `job-controller` and `endpointslice-controller`), while the ones that interact with a cloud provider run inside the `cloud-controller-manager`.
+
+> [!NOTE]
+>
+> Kubernetes does not necessarily have a single controller for every resource.  
+> For example:
+>
+> - the `Deployment` controller creates and manages the `ReplicaSet`, while the `ReplicaSet` controller ensures that the desired number of `Pods` exists;
+> - the behavior of the `Service` is split across several components: the EndpointSlice controller creates and updates the `EndpointSlices` (owned by the `Service`) with the addresses of the `Pods` matching the selector, `kube-proxy` on each node configures the rules that route the traffic to those addresses and, only for `LoadBalancer` Services, the service controller inside the cloud-controller-manager creates the external load balancer.
+>
+>   ```text
+>   Deployment                        Service
+>       │                                 │
+>       │ Deployment controller           │ EndpointSlice controller
+>       ▼                                 ▼
+>   ReplicaSet                        EndpointSlices
+>       │                                 │
+>       │ ReplicaSet controller           │ kube-proxy (on each node)
+>       ▼                                 ▼
+>   Pods                              iptables / IPVS / nftables rules
+>   ```
+
+The controller is a process that runs in the background and continuously monitors the status of the resources it is supposed to manage.  
+When we create or update a resource, the desired state is persisted by the API server in etcd. Controllers continuously observe the resources through the Kubernetes API (with watch requests) and reconcile the actual state with the desired state, often reporting the observed state in the `status` of the object.
+
+When a resource is deleted, the API server usually removes it from etcd immediately, with two main exceptions:
+
+- if the object has finalizers (`metadata.finalizers`), the deletion request is recorded by setting `metadata.deletionTimestamp`, and the object is actually deleted only when the corresponding controllers have done their cleanup and removed all their finalizers;
+- `Pods` are deleted gracefully: they stay in the `Terminating` state until the kubelet has stopped their containers (by default, within 30 seconds).
+
+> [!TIP]
+>
+> By default, `kubectl delete` waits until the object is actually deleted (`--wait=false` returns immediately).  
+> If the controller that handles a finalizer is not running anymore (for example, because the operator has been uninstalled), the object is never deleted: the finalizer can be removed manually with `kubectl patch <resource> <name> --type=merge -p '{"metadata":{"finalizers":null}}'`, skipping the cleanup.
+
+---
+
+### 3.2 ReplicaSets
+
+This is the structure of a `ReplicaSet` YAML manifest
+
+```yaml
+apiVersion: apps/v1
+kind: ReplicaSet
+metadata:
+  name: frontend
+  labels:
+    app: guestbook
+    tier: frontend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      tier: frontend
+  template:
+    metadata:
+      labels:
+        tier: frontend
+    spec:
+      containers:
+      - name: php-redis
+        image: us-docker.pkg.dev/google-samples/containers/gke/gb-frontend:v5
+```
+
+In the ReplicaSet, `.spec.template.metadata.labels` must match `.spec.selector`, or it will be rejected by the API.
+
+> [!TIP]
+>
+> In the past, the `ReplicationController` (introduced in the initial Kubernetes v1.0 release in July 2015) was used instead of `ReplicaSet` (introduced later in Kubernetes v1.2 in March 2016).  
+> Today the `ReplicationController` is a legacy API, superseded by `ReplicaSet` (and `Deployment`). The main differences are:
+>
+> - the `ReplicaSet` also supports set-based selectors (`matchExpressions` with operators like `In`, `NotIn`, `Exists`, `DoesNotExist`), while the `ReplicationController` supports only equality-based selectors (a plain `key: value` map under `selector`);
+> - in the `ReplicaSet` the field `selector` is mandatory, while in the `ReplicationController`, if omitted, it defaults to the labels of the Pod template (`.spec.template.metadata.labels`).
+
+There are three ways to scale a ReplicaSet:
+
+- `kubectl apply -f replicaset-definition.yaml`: modify the value of `replicas` inside the file manifest and then `apply` it;
+- `kubectl scale --replicas=6 -f replicaset-definition.yaml`: uses an existing manifest file (still required as input) but does not update its content;
+- `kubectl scale --replicas=6 replicaset frontend`: this is an imperative command that scales the already deployed ReplicaSet, without the need for a manifest file.
+
+There are also options to automatically scale the replicas based on the load, but we'll see them in another course.
+
+> [!WARNING]
+>
+> Updating the Pod template of a `ReplicaSet` does not trigger an automatic rolling update.  
+> The updated Pod template is used only for newly created Pods.  
+> Existing Pods are not automatically replaced and continue running with their current configuration until they are deleted.  
+> Deployments should be preferred when controlled rolling updates or rollbacks are required.
+
+Useful commands:
+
+- `kubectl create -f replicaset-definition.yaml`: creates a `ReplicaSet` starting from the definition inside the YAML manifest;
+- `kubectl get replicaset <replicaset-name>`: retrieves the `ReplicaSet` in the default namespace;
+- `kubectl delete replicaset <replicaset-name>`: deletes a `ReplicaSet` and all of its pods;
+- `kubectl replace -f replicaset-definition.yaml`: replaces or updates a `ReplicaSet`;
+- `kubectl scale`: scales the replicas of a `ReplicaSet`.
+
+---
+
+### 3.3 Deployments
+
+The `Deployment` is "higher in hierarchy" compared to `ReplicaSet` (and `ReplicationController`).  
+If the RS is a controller of Pods, a `Deployment` manages one or more ReplicaSets, providing rollout and rollback capabilities.
+
+The structure of a `Deployment` YAML manifest is almost identical to the one of the `ReplicaSet`, except for the Kind.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  labels:
+    app: nginx
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.14.2
+        ports:
+        - containerPort: 80
+```
+
+At creation, the `Deployment` automatically generates a `ReplicaSet` as well (named after the `Deployment` plus a hash of the Pod template, e.g. `nginx-deployment-66b6c48dd5`), in addition to the `Deployment` object itself.
+
+> [!IMPORTANT]
+>
+> Remember that you cannot edit specifications of an existing `Pod` other than:
+>
+> - `spec.containers[*].image`
+> - `spec.initContainers[*].image`
+> - `spec.activeDeadlineSeconds`
+> - `spec.tolerations` (only additions to the existing ones)
+>
+> If you really need to, you can instead recreate the Pod with `kubectl replace --force -f <file-name>`.  
+> Useful trick: if you change a forbidden field with `kubectl edit pod <pod-name>`, the edit is rejected, but kubectl saves your modified manifest to a temporary file (e.g. `/tmp/kubectl-edit-xxxxx.yaml`), which you can use directly with `kubectl replace --force -f /tmp/kubectl-edit-xxxxx.yaml`.
+>
+> With `Deployments`, instead, you can easily edit any field / property of the Pod template.  
+> Since the Pod template is a child of the `Deployment` specification, with every change to the Pod template, the Deployment automatically creates the necessary new Pods (via a new `ReplicaSet`) to replace the old ones.  
+> So if you need to edit a property of a `Pod` that is part of a `Deployment`, you may do that simply by running the command `kubectl edit deployment <deployment-name>`.
+
+Useful commands:
+
+- `kubectl scale deployment nginx --replicas=4`: scale a `Deployment` using the kubectl scale command;
+- `kubectl create deployment <deployment-name> --image=<image>`: create a `Deployment`;
+- `kubectl get deployment <deployment-name>`: retrieves a `Deployment` based on its name;
+- `kubectl get deployments`: retrieves all deployments from the default namespace;
+- `kubectl edit deployment <deployment-name>`: edit a property of a `Deployment`.
+
+#### Rolling updates and rollbacks
 
 When you first create a `Deployment`, it triggers a rollout.  
 Each rollout is associated with a `ReplicaSet` and is recorded as a new `Deployment` revision.  
@@ -3347,225 +1635,7 @@ Here are some handy examples related to updating a Kubernetes Deployment:
 
 ---
 
-### Additional Deployment strategies
-
-Besides the built-in Deployment strategies (`RollingUpdate` and `Recreate`), there are other application deployment strategies commonly used in production, such as:
-
-- Blue-Green deployment;
-- Canary deployment.
-
-These are not configurable in the Kubernetes Deployment manifest, but they can be implemented in other ways.  
-They are best implemented with tools that can split the traffic by percentage, such as service meshes like Istio, the Gateway API (`HTTPRoute` with weighted backends) or tools like Argo Rollouts and Flagger, but let's see how to implement them with Kubernetes primitives (Deployments and Services).
-
-The **Blue-Green deployment** procedure is as follows:
-
-1) the old version (blue) is deployed;
-2) all the traffic is routed to the old (blue) version;
-3) the new version (green) is deployed alongside the old version (blue);
-4) tests are performed on the new version while public traffic is still routed to the old version;
-5) once all tests are passed, we switch traffic to the new (green) version, all at once.
-
-and we can implement it in Kubernetes in this way:
-
-1) create the first deployment called `blue`, whose Pods have the labels `app: web` and `version: v1`;
-
-    ```yaml
-    apiVersion: apps/v1
-    kind: Deployment
-    metadata:
-      name: blue
-    spec:
-      replicas: 3
-      selector:
-        matchLabels:
-          app: web
-          version: v1
-      template:
-        metadata:
-          labels:              # the Service selects the Pods through these labels
-            app: web
-            version: v1
-        spec:
-          containers:
-          - name: web
-            image: web:1.0
-    ```
-
-2) create a service with the selector set as `app: web` and `version: v1`;
-
-    ```yaml
-    apiVersion: v1
-    kind: Service
-    metadata:
-      name: web
-    spec:
-      selector:
-        app: web
-        version: v1
-      ports:
-      - port: 80
-    ```
-
-3) create the second deployment called `green`, identical to the first one except for the name, the label `version: v2` (in both the selector and the Pod template) and the new image;
-
-    ```yaml
-    apiVersion: apps/v1
-    kind: Deployment
-    metadata:
-      name: green
-    spec:
-      replicas: 3
-      selector:
-        matchLabels:
-          app: web
-          version: v2
-      template:
-        metadata:
-          labels:
-            app: web
-            version: v2
-        spec:
-          containers:
-          - name: web
-            image: web:2.0
-    ```
-
-4) perform validation tests against the Green deployment (for example through a second, internal Service that selects `version: v2`, or with `kubectl port-forward deployment/green 8080:80`);
-5) change the selector on the service to `version: v2`.
-
-    ```bash
-    kubectl patch service web -p '{"spec":{"selector":{"version":"v2"}}}'
-    ```
-
-    or, equivalently, `kubectl set selector service web 'app=web,version=v2'` (which replaces the whole selector).
-
-If something goes wrong, the rollback is immediate: just set the selector back to `version: v1`, since the blue Pods are still running.  
-Once the green version is stable, you can delete the `blue` Deployment.
-
-> [!IMPORTANT]
->
-> A Service selects **Pods**: the labels it uses must be in the Pod template (`spec.template.metadata.labels`), not only in the `metadata.labels` of the Deployment, which are not copied to the Pods.  
-> With the labels only in the metadata of the Deployment, the Service would have no endpoints.
->
-> Moreover, the selectors of the two Deployments must not overlap (that's why both contain `version`), otherwise each Deployment would also consider the Pods of the other one as its own.
-
-The **Canary deployment** procedure is as follows:
-
-1) the old version is deployed at full desired replicas;
-2) all the traffic is routed to the old version (primary);
-3) the new version is deployed with few replicas (canary);
-4) we start to route only a small portion of traffic to the canary deployment;
-5) tests are performed on the new version, which is partly live with its few replicas;
-6) once all tests are passed, we upgrade the primary deployment with the new version of the application (maybe making use of the RollingUpdate strategy);
-7) we delete the canary deployment.
-
-and we can implement it in Kubernetes in this way (here the label `track` describes the role of the Pods, `stable` or `canary`, instead of their version, because at the end the primary Deployment will also run the new version):
-
-1) create the first deployment called `primary`, with the full amount of replicas (for example 5 Pods), whose Pods have the labels `app: front-end` and `track: stable`;
-
-    ```yaml
-    apiVersion: apps/v1
-    kind: Deployment
-    metadata:
-      name: primary
-    spec:
-      replicas: 5
-      selector:
-        matchLabels:
-          app: front-end
-          track: stable
-      template:
-        metadata:
-          labels:
-            app: front-end
-            track: stable
-        spec:
-          containers:
-          - name: front-end
-            image: front-end:1.0
-    ```
-
-2) create a service with the selector set as `app: front-end` and `track: stable`;
-
-    ```yaml
-    apiVersion: v1
-    kind: Service
-    metadata:
-      name: front-end
-    spec:
-      selector:
-        app: front-end
-        track: stable
-      ports:
-      - port: 80
-    ```
-
-3) create the second deployment called `canary`, with a reduced amount of replicas (for example 1 Pod), whose Pods have the labels `app: front-end` and `track: canary`, and the new image;
-
-    ```yaml
-    apiVersion: apps/v1
-    kind: Deployment
-    metadata:
-      name: canary
-    spec:
-      replicas: 1
-      selector:
-        matchLabels:
-          app: front-end
-          track: canary
-      template:
-        metadata:
-          labels:
-            app: front-end
-            track: canary
-        spec:
-          containers:
-          - name: front-end
-            image: front-end:2.0
-    ```
-
-4) change the Service selector to `app: front-end` only, so that the Pods of both Deployments become endpoints of the same Service: with 5 + 1 Pods, the canary receives about 1/6 (≈ 17%) of the traffic;
-
-    ```bash
-    kubectl set selector service front-end 'app=front-end'
-    ```
-
-5) tests are performed on the new version;
-6) once we are confident, we upgrade the Pod version of the primary deployment to the new one;
-
-    ```bash
-    kubectl set image deployment primary front-end=front-end:2.0
-    ```
-
-7) the canary deployment is deleted.
-
-    ```bash
-    kubectl delete deployment canary
-    ```
-
-If the canary does not work as expected, the rollback is immediate: just delete the `canary` Deployment (or scale it to 0).
-
-One of the caveats of the canary deployment is that we have limited control over the split of traffic through the deployments.  
-The traffic split is going to be governed by the number of Pods present in each deployment.  
-For example, we cannot route 1% of traffic to the canary deployment (we could if we had 100 Pods).  
-A service mesh such as Istio (or the Gateway API) allows routing traffic based on explicit percentages (for example 1%, 5%, 10%, 25%, 50%, etc.), independently of the number of Pods backing each Deployment.
-
-> [!IMPORTANT]
->
-> Kubernetes Services do **not** support weighted traffic routing.  
-> When multiple Pods match the Service selector, kube-proxy distributes the **connections** (not the single requests) among the ready endpoints, each with the same probability.  
-> The traffic distribution therefore depends mainly on the number of Pods backing each Deployment (and, with long-lived connections, it can be uneven).
-
-| Pattern       | Downtime                   | Traffic shift    | Rollback                                   | Extra resources                          |
-| ------------- | -------------------------- | ---------------- | ------------------------------------------ | ---------------------------------------- |
-| Recreate      | Yes                        | Immediate        | `kubectl rollout undo` (with new downtime) | None                                     |
-| RollingUpdate | No (with readiness probes) | Progressive      | `kubectl rollout undo` (progressive)       | Up to `maxSurge` Pods                    |
-| Blue-Green    | No                         | Immediate switch | Very fast (switch the selector back)       | Double, until the old version is removed |
-| Canary        | No                         | Progressive      | Very fast (delete the canary)              | A few Pods                               |
-
----
-
-## Jobs and CronJobs
+### 3.4 Jobs and CronJobs
 
 Kubernetes supports different types of workloads depending on the application lifecycle, which can be broadly divided into long-running workloads and batch workloads.  
 For long-running applications (such as web applications), Deployments are typically used.  
@@ -3957,9 +2027,1932 @@ Useful commands:
 
 ---
 
-## Network Policies
+## Part 4 – Configuration
 
-### Description of Ingress and Egress in non-Kubernetes environments
+### 4.1 ConfigMaps
+
+Instead of defining environment variables in the Pod definition files, we can inject them into the containers of the Pods using ConfigMaps.  
+ConfigMaps are used to pass configuration data in the form of key-value pairs.
+
+There are two phases involved in setting ConfigMaps:
+
+1) create the `ConfigMap`;
+2) inject it into the pod.
+
+Like other Kubernetes objects, we can create the `ConfigMap` in two ways:
+
+- imperative: `kubectl create configmap` specifying the required arguments;
+- declarative: `kubectl create -f <file-name>`.
+
+Imperatively, this can be done by:
+
+- declaring the key values in the `kubectl` command
+
+  ```bash
+  kubectl create configmap <configmap-name> --from-literal=<key>=<value> [--from-literal=<key>=<value> ...]
+  kubectl create configmap app-config --from-literal=APP_COLOR=blue --from-literal=APP_ENV=prod
+  ```
+
+- loading an entire file (not a manifest) as a **single key** using the `--from-file` syntax
+
+  ```bash
+  kubectl create configmap <configmap-name> --from-file=<path-to-file>
+  kubectl create configmap app-config --from-file=app_config.properties
+  ```
+
+  (with `--from-file=<key>=<path-to-file>` you can also choose a key name different from the file name)
+
+- if instead you want one key for each `KEY=value` line of the file (for example to inject them as environment variables with `envFrom`), use `--from-env-file`:
+
+  ```bash
+  kubectl create configmap app-config --from-env-file=app_config.properties
+  ```
+
+With the declarative approach instead, we do the following
+
+```bash
+kubectl create -f <file-name>
+kubectl create -f config-map.yaml
+```
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+data:
+  APP_COLOR: blue
+  APP_ENV: prod
+```
+
+It is important to name the ConfigMaps appropriately as we'll use these names later to associate them with the pods.
+
+In order to inject the `ConfigMap`, we can use the property `envFrom` on the Pod manifest, which is a list of sources (ConfigMaps or Secrets): each key-value pair of each source becomes an environment variable.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: simple-webapp-color
+spec:
+  containers:
+  - name: simple-webapp-color
+    image: simple-webapp-color
+    ports:
+    - containerPort: 8080
+    envFrom:
+    - configMapRef:
+        name: app-config
+```
+
+And then create the Pod with `kubectl create -f pod-definition.yaml`.
+
+Useful commands:
+
+- `kubectl get configmaps`: list the ConfigMaps inside the default namespace;
+- `kubectl describe configmaps`: also list the configuration data of the ConfigMaps.
+
+---
+
+### 4.2 Secrets
+
+Secrets are similar to ConfigMaps but are specifically intended to hold confidential data.  
+Their data are stored in an encoded format by default, but it is desirable to encrypt them.
+
+As with ConfigMaps, there are two phases involved in setting Secrets:
+
+1) create the Secret;
+2) inject it into the pod.
+
+In addition, there are also different kinds of Secrets, with different use cases and expected keys, on which some checks can be performed by Kubernetes.
+
+| Secret type                           | Typical use                             | Expected keys           |
+| ------------------------------------- | --------------------------------------- | ----------------------- |
+| `Opaque`                              | arbitrary user-defined data             | any keys                |
+| `kubernetes.io/tls`                   | data for a TLS client or server         | `tls.crt`, `tls.key`    |
+| `kubernetes.io/dockerconfigjson`      | serialized `~/.docker/config.json` file | `.dockerconfigjson`     |
+| `kubernetes.io/dockercfg`             | serialized `~/.dockercfg` file          | `.dockercfg`            |
+| `kubernetes.io/basic-auth`            | credentials for basic authentication    | `username`, `password`  |
+| `kubernetes.io/ssh-auth`              | credentials for SSH authentication      | `ssh-privatekey`        |
+| `bootstrap.kubernetes.io/token`       | bootstrap token data                    | many keys expected      |
+| `kubernetes.io/service-account-token` | `ServiceAccount` token                  | automatically generated |
+
+`Opaque` is the default `Secret` type.  
+When you create a `Secret` using kubectl, you must use the `generic` subcommand to indicate an `Opaque` Secret type.
+
+As with ConfigMaps, we can also create Secrets in two ways:
+
+- imperative: `kubectl create secret` specifying the required arguments;
+- declarative: `kubectl create -f <file-name>`.
+
+Imperatively, this can be done by declaring the key values in the `kubectl` command
+
+```bash
+kubectl create secret generic <secret-name> --from-literal=<key>=<value>
+kubectl create secret generic app-secret --from-literal=DB_Host=mysql --from-literal=DB_User=root --from-literal=DB_Password=paswrd
+```
+
+(but this can be complicated when we need to pass many values)
+
+or (still imperatively) through a file (not a manifest)
+
+```bash
+kubectl create secret generic <secret-name> --from-file=<path-to-file>
+kubectl create secret generic app-secret --from-file=app_secret.properties
+```
+
+(the same `--from-file` / `--from-env-file` distinction seen for ConfigMaps applies here)
+
+With the declarative approach instead, we do the following
+
+```bash
+kubectl create -f <file-name>
+kubectl create -f secret-data.yaml
+```
+
+When using the declarative approach, we should specify the data in `Base64` format.  
+For this purpose, we can use the `base64` Linux utility `echo -n 'VALUE' | base64`:
+
+```console
+$ echo -n 'mysql' | base64
+bXlzcWw=
+$ echo -n 'root' | base64
+cm9vdA==
+$ echo -n 'paswrd' | base64
+cGFzd3Jk
+```
+
+which makes the secret definition file look like the following
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secret
+data:
+  DB_Host: bXlzcWw=
+  DB_User: cm9vdA==
+  DB_Password: cGFzd3Jk
+```
+
+We can also prepare the manifest without encoding the data by using the `stringData` field instead of `data`.  
+For example, the following example is equivalent to the previous one
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secret
+stringData:
+  DB_Host: mysql
+  DB_User: root
+  DB_Password: paswrd
+```
+
+> [!CAUTION]
+>
+> The `data` field stores values encoded in Base64.  
+> The `stringData` field accepts plain text values and is automatically converted by the Kubernetes API server to Base64 when the `Secret` is created or updated, and stored into the `data` field.
+>
+> Base64 is **not encryption**. It is only an encoding format used to represent binary data as text.  
+> Kubernetes Secrets are, by default, stored unencrypted in the API server's underlying data store (etcd).  
+> In order to safely use Secrets, take at least the following steps:
+>
+> - enable Encryption at Rest for Secrets;
+> - enable or configure RBAC rules with least-privilege access to Secrets;
+> - restrict secrets access to specific containers;
+> - consider using External Secret store providers (like AWS Provider, Azure Provider, GCP Provider or Vault Provider).
+
+In order to decode the encoded values, use the same `base64` utility adding a `--decode` parameter, so `echo -n 'DATA' | base64 --decode`:
+
+```console
+$ echo -n 'bXlzcWw=' | base64 --decode
+mysql
+
+$ echo -n 'cm9vdA==' | base64 --decode
+root
+
+$ echo -n 'cGFzd3Jk' | base64 --decode
+paswrd
+```
+
+In order to inject the secret, also here we can use the property `envFrom` on the Pod manifest.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: simple-webapp-color
+spec:
+  containers:
+  - name: simple-webapp-color
+    image: simple-webapp-color
+    ports:
+    - containerPort: 8080
+    envFrom:
+    - secretRef:
+        name: app-secret
+```
+
+And then create the Pod with `kubectl create -f pod-definition.yaml`.
+
+Useful commands:
+
+- `kubectl get secrets`: list the secrets inside the default namespace;
+- `kubectl describe secrets`: shows the attributes of the secrets but **hides the values**;
+- `kubectl get secret <secret-name> -o yaml`: list the attributes of a specific secret, **along with the encoded values**.
+
+---
+
+### 4.3 Injecting ConfigMaps and Secrets
+
+Along with `configMapRef` and `secretRef`, which let you inject all the key-values of a resource as environment variables,  
+there are also the `configMapKeyRef` and `secretKeyRef` options for choosing specific keys to import.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.14.2
+    ports:
+    - containerPort: 80
+    env:
+    - name: HOST
+      valueFrom:
+        configMapKeyRef:
+          name: nginx-config
+          key: nginx.host
+    - name: DB_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: db-credentials
+          key: password
+    envFrom:
+    - configMapRef:
+        name: nginx-config-bulk
+    - secretRef:
+        name: nginx-secrets-bulk
+```
+
+Instead of exposing ConfigMaps and Secrets as environment variables, they can also be mounted as volumes.  
+In this case, each key becomes a file within the mounted volume with:
+
+- the filename corresponding to the key;
+- the file content corresponding to the associated value.
+
+The following example mounts both a `ConfigMap` and a `Secret` as Volumes.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+data:
+  nginx.conf: |
+    events {}
+
+    http {
+      server {
+        listen 443 ssl;
+
+        ssl_certificate     /etc/nginx/tls/tls.crt;
+        ssl_certificate_key /etc/nginx/tls/tls.key;
+
+        location / {
+          return 200 "Hello from Kubernetes!\n";
+        }
+      }
+    }
+```
+
+```bash
+openssl req \
+  -x509 \
+  -newkey rsa:2048 \
+  -nodes \
+  -days 365 \
+  -keyout tls.key \
+  -out tls.crt \
+  -subj "/CN=localhost"
+```
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nginx-tls
+type: kubernetes.io/tls
+stringData:
+  tls.crt: |
+    -----BEGIN CERTIFICATE-----
+    [replace with generated tls.crt content]
+    -----END CERTIFICATE-----
+  tls.key: |
+    -----BEGIN PRIVATE KEY-----
+    [replace with generated tls.key content]
+    -----END PRIVATE KEY-----
+```
+
+Here we used `stringData` for the `tls.crt` and `tls.key` elements of the secret, which allows us to write data in a non-encoded format.  
+When applied, Kubernetes automatically encodes the values of `stringData` in Base64 and puts them instead in the `data` field.  
+We are also using a Secret of type `kubernetes.io/tls` instead of a generic `Opaque` type.
+
+> [!TIP]
+>
+> For the exam, it is much faster to create these two objects imperatively:
+>
+> ```bash
+> kubectl create configmap nginx-config --from-file=nginx.conf
+> kubectl create secret tls nginx-tls --cert=tls.crt --key=tls.key
+> ```
+>
+> The first command creates a key named `nginx.conf` (the file name) containing the whole file; the second one creates a Secret of type `kubernetes.io/tls` with the `tls.crt` and `tls.key` keys.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-with-volumes
+spec:
+  containers:
+  - name: nginx
+    image: nginx:1.14.2
+    ports:
+    - containerPort: 443
+    volumeMounts:
+    - name: nginx-config
+      mountPath: /etc/nginx/nginx.conf
+      subPath: nginx.conf
+    - name: nginx-tls
+      mountPath: /etc/nginx/tls
+      readOnly: true
+  volumes:
+  - name: nginx-config
+    configMap:
+      name: nginx-config
+  - name: nginx-tls
+    secret:
+      secretName: nginx-tls
+```
+
+> [!NOTE]
+>
+> Here we used `subPath` for the `volumeMount` of the configuration.  
+> Without `subPath`, the entire volume is mounted at `mountPath`. With `subPath`, only the specified file or directory within the volume is mounted at `mountPath`.  
+>
+> In this example, we are essentially saying:  
+> > From the nginx-config volume, take only the nginx.conf file and mount it here.
+>
+> ```text
+> /etc/nginx/
+>         └── nginx.conf
+>
+> /etc/nginx/tls/
+>             ├── tls.crt
+>             └── tls.key
+> ```
+>
+> Using `subPath` is particularly useful when we want to mount a single file or directory **without replacing or hiding the other contents of the target directory**.  
+> For example, mounting the entire `nginx-config` volume at `/etc/nginx` would hide the files that are already present in `/etc/nginx` in the container image. Using `subPath` allows us to mount only `nginx.conf`, leaving the rest of `/etc/nginx` untouched.  
+> Therefore, if we want to mount an entire volume and its contents, we can omit `subPath`. If we want to mount only a specific file or directory while preserving the existing contents of the target directory, we can use `subPath`.
+>
+> A `subPath` mount also does not receive automatic updates when the underlying `ConfigMap` or `Secret` changes.
+>
+> We are also using `readOnly: true`, which is optional for Secret and ConfigMap volumes (they are read-only by nature), but explicitly specifying it makes the intent clearer.
+>
+> Notice that the field used to specify the referenced object is not named consistently: `ConfigMap` volumes use `configMap.name`, while `Secret` volumes use `secret.secretName`. Both fields contain the name of the corresponding Kubernetes object.
+
+```bash
+kubectl apply -f nginx-config.yaml
+kubectl apply -f nginx-tls.yaml
+kubectl apply -f nginx-with-volumes.yaml
+```
+
+And we can see that the files are mounted as expected with the following commands
+
+```console
+$ kubectl exec nginx-with-volumes -- cat /etc/nginx/nginx.conf
+events {}
+
+http {
+  server {
+    listen 443 ssl;
+
+    ssl_certificate     /etc/nginx/tls/tls.crt;
+    ssl_certificate_key /etc/nginx/tls/tls.key;
+
+    location / {
+      return 200 "Hello from Kubernetes!\n";
+    }
+  }
+}
+
+$ kubectl exec nginx-with-volumes -- ls /etc/nginx/tls
+tls.crt
+tls.key
+```
+
+> [!TIP]
+>
+> This is a common production pattern:
+>
+> - the `ConfigMap` stores the NGINX configuration, which can change frequently;
+> - the `Secret` stores the TLS certificate and the private key.
+>
+> Keeping configuration and sensitive data outside the container image makes the application easier to configure and more secure.
+
+You can also mount only specific keys by using the `items` field.
+
+```yaml
+volumes:
+- name: config-volume
+  configMap:
+    name: nginx-config
+    items:
+    - key: nginx.conf
+      path: nginx.conf
+- name: secret-volume
+  secret:
+    secretName: nginx-tls
+    items:
+    - key: tls.crt
+      path: tls.crt
+    - key: tls.key
+      path: tls.key
+```
+
+Only the listed keys are mounted, and the `path` can also be different from the key, to rename the file (e.g. `key: tls.crt` with `path: server.crt`).
+
+> [!CAUTION]
+>
+> A `Secret` or `ConfigMap` mounted as a `volume` is not stored inside the container image.  
+> Kubernetes creates the files dynamically and mounts them into the container's filesystem (Secrets are mounted on a `tmpfs`, an in-memory filesystem, so they are never written to the node's disk).
+>
+> If the `Secret` or `ConfigMap` is updated, the mounted files are automatically updated as well (with a small delay), without restarting the `Pod`, except when using `subPath` (and other particular cases).  
+> However, only the files are updated: the application must detect the change and reload its configuration by itself (for example, NGINX needs an `nginx -s reload`).  
+> Instead, when a `Secret` or `ConfigMap` is exposed as environment variable, the `Pod` must be recreated to see the new values (for a Deployment, for example with `kubectl rollout restart deployment <deployment-name>`).
+
+```text
+                ConfigMap / Secret
+                        │
+        ┌───────────────┴───────────────┐
+        │                               │
+        ▼                               ▼
+Environment Variables             Mounted Volume
+        │                               │
+        ▼                               ▼
+    env / envFrom              volume + volumeMount
+        │                               │
+        ▼                               ▼
+Available at startup            Available as files
+        │                               │
+        ▼                               ▼
+Pod restart required        Files automatically updated
+  (after changes)                (except subPath)
+```
+
+> [!TIP]
+>
+> Use a normal `ConfigMap` or `Secret` volume when you want configuration updates to be propagated automatically to a running `Pod` (the application still has to reload them).  
+> Use `subPath` when you need to mount a single file to a specific location in the container's filesystem, but remember that updates to the `ConfigMap` or `Secret` will **not** be reflected until the `Pod` is recreated.
+
+---
+
+## Part 5 – Resources and scheduling
+
+### 5.1 Resource requirements, LimitRanges and ResourceQuotas
+
+When scheduling a `Pod`, the kube-scheduler compares the resource requests of the Pod with the resources still available on each node, i.e. the node's allocatable resources minus the requests of the Pods already scheduled there (the actual usage of the node is **not** considered).  
+If a node does not have enough available resources, the kube-scheduler will not schedule the Pod onto that node and will instead search for nodes with sufficient resources available.  
+If no node has sufficient available resources, the Pod remains in the `Pending` state until suitable resources become available.
+
+We can specify the amount of CPU and memory requested by a container at creation with `resources.requests`.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: simple-webapp-color
+spec:
+  containers:
+  - name: simple-webapp-color
+    image: simple-webapp-color
+    ports:
+    - containerPort: 8080
+    resources:
+      requests:
+        memory: "4Gi"
+        cpu: 2
+```
+
+For CPU resources, you can specify values as low as `1m` (one millicore), which corresponds to `0.001` CPU.  
+For example, the following values are equivalent:
+
+- `0.1`
+- `"0.1"`
+- `"100m"`
+
+Similarly, memory can be specified in different units:
+
+| unit | unit name | capacity in bytes | power |
+| ---- | --------- | ----------------- | ----- |
+| `k`  | Kilobytes | 1,000             | 10^3  |
+| `Ki` | Kibibytes | 1,024             | 2^10  |
+| `M`  | Megabytes | 1,000,000         | 10^6  |
+| `Mi` | Mebibytes | 1,048,576         | 2^20  |
+| `G`  | Gigabytes | 1,000,000,000     | 10^9  |
+| `Gi` | Gibibytes | 1,073,741,824     | 2^30  |
+| `T`  | Terabytes | 1,000,000,000,000 | 10^12 |
+| `Ti` | Tebibytes | 1,099,511,627,776 | 2^40  |
+
+For example, the following values represent approximately the same amount of memory:
+
+- `256Mi`
+- `268435456` (bytes)
+- `268M`
+
+> [!CAUTION]
+>
+> Suffixes are case-sensitive: the decimal kilo is a lowercase `k` (uppercase `K` is not valid), and `m` means *milli*, so `memory: 400m` is a request for 0.4 bytes, not for 400 megabytes!
+
+You can set a limit to the resources used by a container with `resources.limits`.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: simple-webapp-color
+spec:
+  containers:
+  - name: simple-webapp-color
+    image: simple-webapp-color
+    ports:
+    - containerPort: 8080
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: 2
+      limits:
+        memory: "2Gi"
+        cpu: 2
+```
+
+If the limit is exceeded:
+
+- CPU: the container is throttled (it simply cannot use more CPU time);
+- Memory: the container may be terminated due to an out-of-memory (OOM) event.
+
+> [!CAUTION]
+>
+> A memory limit does not guarantee that a container will never be `OOMKilled`.  
+> It defines the maximum amount of memory the container is allowed to consume: if a container exceeds its memory limit, the kernel may terminate one or more processes in the container with an out-of-memory (OOM) kill.  
+> Moreover, even a container below its limit can be OOM-killed or evicted when the node itself runs out of memory, especially if it is using more memory than it requested.
+
+Resource `requests` and `limits` have different purposes:
+
+- **requests** are primarily used for **scheduling**: the scheduler uses the requested resources to determine whether a Node has enough allocatable resources to host the Pod;
+- **limits** are used for **runtime enforcement**: they define the maximum amount of a resource that a container is allowed to consume.
+
+If `limits` are specified but `requests` are not, Kubernetes automatically sets the `requests` to the same values as the `limits`.  
+Both `resources.requests` and `resources.limits` are normally defined at container level (`spec.containers[*].resources`).  
+Since Kubernetes v1.34, you can also define an overall budget at Pod level (`spec.resources`, a beta feature enabled by default); when both are specified, the Pod-level values take precedence. For the exam, the container level remains the standard approach.
+
+> [!NOTE]
+>
+> By default a container has no `limits` or `requests` on resources.  
+> This means that, unless other policies apply, a container is not explicitly constrained by CPU or memory requests/limits and may consume resources available on the node, potentially affecting other workloads.
+>
+> A resource request is not a maximum usage value.
+>
+> For example, if a container has:
+>
+> ```yaml
+> resources:
+>   requests:
+>     memory: 1Gi
+>   limits:
+>     memory: 4Gi
+> ```
+>
+> the scheduler uses 1 GiB when determining whether the Pod can be scheduled, but the container can use more than 1 GiB at runtime, up to its 4 GiB limit.
+
+You can also create `LimitRange` objects at namespace level to constrain resource allocations.  
+For Pods and containers, a `LimitRange` can define default, minimum and maximum CPU and memory `requests` and `limits`.  
+It can also define minimum and maximum storage requests for `PersistentVolumeClaims` (storage-related configuration is covered in more detail later in the course).
+
+```yaml
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: resource-constraint
+spec:
+  limits:
+  - default:
+      cpu: 500m
+      memory: 1Gi
+    defaultRequest:
+      cpu: 250m
+      memory: 512Mi
+    max:
+      cpu: "1"
+      memory: 1Gi
+    min:
+      cpu: 100m
+      memory: 500Mi
+    type: Container
+```
+
+Note that `LimitRange` constraints and defaults are applied during Pod admission.  
+If we create or change a `LimitRange`, it does not affect existing Pods; it applies to newly created Pods.
+
+> [!TIP]
+>
+> Not all fields (`default`, `defaultRequest`, `max`, `min`, `maxLimitRequestRatio`, etc.) are meaningful for every `type`. For example:
+>
+> - `default` and `defaultRequest` are intended for `type: Container`, as they define the default resource requests and limits applied to individual containers;
+> - for `type: Pod`, only `min`, `max` (and `maxLimitRequestRatio`) can be used, and they apply to the sum of the requests/limits of all the containers of the Pod; `default` and `defaultRequest` are rejected, because defaults are applied to individual containers.
+
+Finally, you can also create `ResourceQuota` objects at namespace level to limit the aggregate amount of resources that can be requested or limited across all Pods in that namespace.  
+For example, a `ResourceQuota` can limit the total amount of CPU and memory requests and limits across all Pods in a namespace (it can also limit the number of objects of a given kind, e.g. `pods: "10"`).  
+If creating or updating a resource would cause the quota to be exceeded, the request is rejected by the API server.
+
+```yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: my-resource-quota
+spec:
+  hard:
+    requests.cpu: 4
+    requests.memory: 8Gi
+    limits.cpu: 8
+    limits.memory: 16Gi
+```
+
+> [!IMPORTANT]
+>
+> When a `ResourceQuota` limits CPU or memory (`requests.*` or `limits.*`), every new Pod in the namespace must specify the corresponding requests or limits, otherwise its creation is rejected.  
+> A `LimitRange` with `default` / `defaultRequest` values is the usual way to provide them automatically.
+
+```text
+Namespace
+│
+├── Pod A
+│   ├── request: 1 CPU / 2 GiB
+│   └── limit:   2 CPU / 4 GiB
+│
+├── Pod B
+│   ├── request: 2 CPU / 4 GiB
+│   └── limit:   4 CPU / 8 GiB
+│
+└── Pod C
+    ├── request: 1 CPU / 2 GiB
+    └── limit:   2 CPU / 4 GiB
+
+Total requests: 4 CPU / 8 GiB  ← quota reached
+Total limits:   8 CPU / 16 GiB ← quota reached
+```
+
+> [!NOTE]
+>
+> Unlike a container `resources.limits`, a `ResourceQuota` does not limit the resources available to a single container or Pod.  
+> It limits the aggregate resource consumption of the namespace.
+
+| Mechanism       | Scope     | Main purpose                              |
+| --------------- | --------- | ----------------------------------------- |
+| `requests`      | Container | Scheduling                                |
+| `limits`        | Container | Runtime enforcement                       |
+| `LimitRange`    | Namespace | Constrain individual resource allocations |
+| `ResourceQuota` | Namespace | Limit aggregate resource consumption      |
+
+---
+
+### 5.2 Taints and tolerations
+
+Taints and Tolerations affect the relationship between Pods and nodes.
+
+- Taints are set on nodes and act as a repellent to Pods;
+- Tolerations are set on Pods and allow (but do not force) them to be scheduled onto nodes with matching taints.
+
+By default, Pods have no tolerations (apart from two added automatically, see the note at the end of this section); therefore, the scheduler will not place a Pod onto a node with a `NoSchedule` or `NoExecute` taint that the Pod does not tolerate (a `PreferNoSchedule` taint is only avoided when possible).
+
+To define a taint on a node, run the following command
+
+```bash
+kubectl taint nodes <node-name> <key>[=<value>]:<taint-effect>
+```
+
+The taint effects are:
+
+- `NoSchedule`: the Pod will not be scheduled on the node;
+- `PreferNoSchedule`: the system will try to avoid placing a Pod on a node (but is not guaranteed);
+- `NoExecute`: new Pods will not be scheduled on the node, and any existing Pods that do not tolerate the taint will be evicted.
+
+For example
+
+```bash
+kubectl taint nodes node1 key1=value1:NoSchedule
+```
+
+places a taint on node `node1`. The taint has key `key1`, value `value1`, and taint effect `NoSchedule`. This means that no Pod will be scheduled onto `node1` unless it has a matching toleration.
+
+> [!TIP]
+>
+> Control plane nodes can run Pods, but they are commonly configured with a `NoSchedule` taint so that ordinary application Pods are not scheduled onto them unless they tolerate the taint.
+>
+> ```console
+> $ kubectl describe node controlplane | grep Taint
+> Taints:             node-role.kubernetes.io/control-plane:NoSchedule
+> ```
+>
+> In many clusters, application workloads are kept separate from control plane nodes to reserve those nodes for control plane components.
+
+You can then specify a toleration for a Pod in the Pod `spec`.  
+Both of the following tolerations "match" the taint created by the `kubectl taint` command above, and thus a Pod with either toleration would be scheduled onto `node1`:
+
+```yaml
+tolerations:
+- key: "key1"
+  operator: "Equal"
+  value: "value1"
+  effect: "NoSchedule"
+```
+
+```yaml
+tolerations:
+- key: "key1"
+  operator: "Exists"
+  effect: "NoSchedule"
+```
+
+To remove the taint added by the command above, you can run:
+
+```bash
+kubectl taint nodes node1 key1=value1:NoSchedule-
+```
+
+> [!TIP]
+>
+> For a `NoExecute` toleration, you can also specify `tolerationSeconds` to define how long a Pod may remain on the node before being evicted. For example:
+>
+> ```yaml
+> tolerations:
+> - key: "key1"
+>   operator: "Equal"
+>   value: "value1"
+>   effect: "NoExecute"
+>   tolerationSeconds: 3600
+> ```
+>
+> This means that the Pod can remain on the node for up to 3600 seconds after the matching NoExecute taint is added. After that time, the Pod will be evicted.
+
+The default Kubernetes scheduler takes taints and tolerations into account when selecting a node to run a particular Pod.  
+However, if you manually specify `.spec.nodeName` for a Pod, the Pod bypasses the scheduler and is bound directly to the specified node, even if that node has a `NoSchedule` taint.  
+Then, if the node has a `NoExecute` taint that the Pod does not tolerate, the Pod will be evicted.
+
+> [!IMPORTANT]
+>
+> A toleration does **not** instruct Kubernetes to schedule a Pod onto a tainted node.  
+> It only allows the Pod to be scheduled there.  
+> The scheduler may still choose another node.
+
+Here's an example of a Pod that has some tolerations defined:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  labels:
+    env: test
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+    imagePullPolicy: IfNotPresent
+  tolerations:
+  - key: "example-key"
+    operator: "Exists"
+    effect: "NoSchedule"
+```
+
+The default value for `operator` is `Equal`.
+
+A toleration "matches" a taint if the keys and the effects are the same, and:
+
+- the `operator` is `Exists` (in which case no value should be specified), or
+- the `operator` is `Equal` and the values are equal.
+
+There are two special cases:
+
+- if the `key` is empty, then the `operator` must be `Exists`, which matches all keys and values. Note that the `effect` still needs to be matched;
+- an empty `effect` matches all effects for that key.
+
+> [!NOTE]
+>
+> Every Pod automatically receives two tolerations (added by the `DefaultTolerationSeconds` admission controller), which you can see with `kubectl describe pod`:
+>
+> ```text
+> Tolerations:  node.kubernetes.io/not-ready:NoExecute op=Exists for 300s
+>               node.kubernetes.io/unreachable:NoExecute op=Exists for 300s
+> ```
+>
+> This is why the Pods running on a node that becomes not ready or unreachable are evicted after about 5 minutes.
+
+---
+
+### 5.3 Node selectors and node affinity
+
+To assign a Pod to a particular node using Node Selectors, we need to:
+
+- label the node with `kubectl label nodes <node-name> <label-key>=<label-value>`;
+- specify selectors inside the section `spec.nodeSelector` of the pod.
+
+```bash
+kubectl label nodes node-1 size=Large
+kubectl label nodes node-1 zone=EU
+```
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+  nodeSelector:
+    size: Large
+    zone: EU
+```
+
+> [!TIP]
+>
+> NodeSelector supports only exact label matching (logical AND).  
+> More complex expressions, like:
+>
+> - place the Pod on a large or medium node;
+> - place the Pod on any node that is not small;
+>
+> require Node Affinity.
+
+The Node Affinity functionality offers advanced features to ensure that Pods are hosted on particular nodes.
+
+The following example does the same as the previous one specified with `nodeSelector`
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+spec:
+  containers:
+  - name: nginx
+    image: nginx
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: size
+            operator: In
+            values:
+            - Large
+          - key: zone
+            operator: In
+            values:
+            - EU
+```
+
+There are currently two types of node affinity:
+
+- `requiredDuringSchedulingIgnoredDuringExecution`: the scheduler can't schedule the Pod unless the rule is met. This works like `nodeSelector`, but with a more expressive syntax;
+- `preferredDuringSchedulingIgnoredDuringExecution`: the scheduler tries to find a node that meets the rule. If a matching node is not available, the scheduler still schedules the Pod.
+
+> [!NOTE]
+>
+> In the preceding types, `IgnoredDuringExecution` means that if the node labels change after Kubernetes schedules the Pod, the Pod continues to run.
+
+The `preferred` type has a different structure: instead of `nodeSelectorTerms`, it takes a list of preferences, each with a `weight` (from 1 to 100) that the scheduler adds to the score of the nodes matching it.
+
+```yaml
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        preference:
+          matchExpressions:
+          - key: size
+            operator: In
+            values:
+            - Large
+```
+
+Inside `nodeSelectorTerms[*].matchExpressions` you define the key-value pairs in the form key - operator - value.
+
+The types of operators are:
+
+- `In`: The label value is present in the supplied set of strings;
+- `NotIn`: The label value is not contained in the supplied set of strings;
+- `Exists`: A label with this key exists on the object;
+- `DoesNotExist`: No label with this key exists on the object;
+- `Gt` / `Lt`: The label value, interpreted as an integer, is greater / less than the supplied value.
+
+> [!NOTE]
+>
+> Multiple `nodeSelectorTerms` are combined with a logical **OR** (the node must satisfy at least one term), while multiple expressions inside the same `matchExpressions` are combined with a logical **AND** (the node must satisfy all of them).
+
+If you want to also allow the Pod to be placed on a node labeled with Medium, you can just add it to the `values` list
+
+```yaml
+        - matchExpressions:
+          - key: size
+            operator: In
+            values:
+            - Large
+            - Medium
+```
+
+If, instead, you want to prevent the Pod from being placed on a node labeled with Small, you can use the following syntax
+
+```yaml
+        - matchExpressions:
+          - key: size
+            operator: NotIn
+            values:
+            - Small
+```
+
+And now for an example using the `Exists` operator: assuming that Medium and Large nodes are labeled while small nodes aren't, the following example gives the same result.
+
+```yaml
+        - matchExpressions:
+          - key: size
+            operator: Exists
+```
+
+In this last case we don't need the value set because the `Exists` operator does not compare the values (in fact, with `Exists` and `DoesNotExist` the `values` field must not be specified).
+
+| Feature              | nodeSelector       | nodeAffinity       |
+| -------------------- | ------------------ | ------------------ |
+| Equality match       | :white_check_mark: | :white_check_mark: |
+| OR conditions        | :x:                | :white_check_mark: |
+| NOT conditions       | :x:                | :white_check_mark: |
+| Preferred scheduling | :x:                | :white_check_mark: |
+
+> [!TIP]
+>
+> Taints/tolerations and node affinity solve opposite problems: taints keep unwanted Pods away from a node, while node affinity attracts Pods to specific nodes.  
+> To dedicate some nodes to specific Pods, combine both: taint the nodes (so that other Pods cannot land there) and give the Pods a matching toleration plus a node affinity (so that they can land only there).
+
+---
+
+## Part 6 – Networking
+
+### 6.1 Services
+
+Services are Kubernetes objects that allow communication between the workloads and with external entities.  
+Services allow loose coupling by abstracting away the IP addresses of the workloads (Pod IPs change every time a Pod is recreated).
+
+Inside the same namespace, a Pod can reach a `Service` simply using the Service name (as if they were people living inside the same house). In this way, for example, the `Pod` named `webapp` can reach the `Service` named `db-service` which resides in the same `Namespace` simply using its name, like for example with `mysql.connect("db-service")`.  
+Instead, if an application wants to reach a Service in another namespace of the same cluster, it must also specify the namespace: `<service>.<namespace>` is enough, while the fully qualified domain name (FQDN) is `<service>.<namespace>.svc.cluster.local`. For example, to reach a mysql db through the service `db-service` in the namespace `dev`, the application can use `mysql.connect("db-service.dev")` or `mysql.connect("db-service.dev.svc.cluster.local")`.  
+This happens because:
+
+- when a service is created, a DNS entry is automatically added (by the cluster DNS, typically CoreDNS);
+- `cluster.local` is the default domain of a Kubernetes cluster;
+- `svc` stands for `Service`;
+- the `/etc/resolv.conf` file of every Pod contains search domains (like `svc.cluster.local`) that complete the short names.
+
+> [!NOTE]
+>
+> A `Service` can select Pods running on different nodes, but Kubernetes does not create one Service per node.
+>
+> A `Service` is **NOT** replicated across multiple nodes but is a namespaced Kubernetes object.
+>
+> Instead, Kubernetes keeps track of the IP addresses of all the Pods matching the `Service`, regardless of the node where they run, in `EndpointSlice` objects (and in the legacy `Endpoints` object, see below).
+>
+> Networking components such as kube-proxy (or eBPF-based implementations like Cilium) use them to configure the forwarding rules on the cluster nodes.
+
+There are mainly 3 types of services:
+
+- `ClusterIP`: creates a virtual IP inside the cluster to enable communication between services. It stays inside the Kubernetes network;
+- `NodePort`: exposes a specific port on every node and forwards incoming requests to the selected Pods;
+- `LoadBalancer`: provisions a load balancer in supported cloud providers (to distribute the load). It is normally used for exposing the Pods on public networks.
+
+There is also a fourth type, `ExternalName`, which maps the `Service` to an external DNS name (e.g. `my.database.example.com`) through a DNS `CNAME` record, without selectors or proxying.
+
+Most Services are assigned a virtual IP address called ClusterIP; Headless Services (created with `clusterIP: None`) and `ExternalName` Services are the exceptions.
+
+In Services, the `selector` defines which Pods the Service targets.  
+To link a `Service` with the Pods, the Pods must have **all** the labels listed in the `selector` of the Service (they can also have other labels).  
+A `Service` exposes, through the correct use of the selectors:
+
+- a single Pod on a single node;
+- multiple Pods on a single node;
+- multiple Pods on multiple nodes.
+
+This is because every `Service` load-balances traffic across the matching Pods (via kube-proxy or an equivalent networking component), regardless of its type (headless Services excepted, see below).
+
+Example of `Service` of type `ClusterIP`
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-service
+spec:
+  selector:
+    app.kubernetes.io/name: MyApp
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 9376
+```
+
+`ClusterIP` is the default type of `Service`; if the type is not declared, the `Service` is automatically created with the `ClusterIP` type.  
+Once created, other Pods can reach the `ClusterIP` Service both using its assigned CLUSTER-IP (the virtual IP address) and its name.
+
+Example of `Service` of type `NodePort`
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-service
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: MyApp
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30007
+```
+
+In a `Service` of type `NodePort`, each element of the array `ports` contains, along with `port` (port of the Service itself) and `targetPort` (destination port on the Pod), the `nodePort`, which is the port opened on every node and reachable from outside the Kubernetes cluster.  
+By default, the `nodePort` must be inside the range 30000 - 32767 (the range can be changed with the API server flag `--service-node-port-range`); it is an optional field and if not declared, a free port from that range is automatically allocated.
+
+> [!NOTE]
+>
+> A `Service` can map any incoming `port` to a `targetPort`. By default and for convenience, the `targetPort` is set to the same value as the port field.
+
+Once this type of service has been created, we can access the exposed Pod through `curl http://<node_ip>:<nodePort>`.  
+
+`NodePort` directly exposes a port on every cluster node.  
+The use cases of the `NodePort` `Service` are mainly debugging, temporary operations, and deployments on non-sensitive environments.
+
+With `NodePort`, the client must call the IP address of one of the nodes together with the `nodePort`. This has two main disadvantages:
+
+- if nodes are replaced / updated / added, they may be assigned a new IP address and this breaks the pattern of the previous calls;
+- you expose the IP addresses of the Kubernetes nodes, and this may raise security concerns.
+
+For production environments, it is often preferable to place a `LoadBalancer` or an `Ingress` in front of applications to provide more flexibility and traffic management features.  
+
+Example of `Service` of type `LoadBalancer`
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-service
+spec:
+  selector:
+    app.kubernetes.io/name: MyApp
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 9376
+  clusterIP: 10.0.171.239
+  type: LoadBalancer
+status:
+  loadBalancer:
+    ingress:
+    - ip: 192.0.2.127
+```
+
+> [!NOTE]
+>
+> This example comes from the Kubernetes documentation: the `clusterIP` and the whole `status` section are shown only for illustration, as they are normally filled in by Kubernetes and by the cloud provider, not written in the manifest.  
+> In environments without a load balancer integration (e.g. bare-metal or local clusters), the `EXTERNAL-IP` of the Service stays `<pending>` and the Service is reachable only as a `NodePort`.
+
+The `Service` types can be viewed as incremental extensions:
+
+- `ClusterIP` exposes the Service inside the cluster through a virtual IP;
+- `NodePort` includes all the features of `ClusterIP` and additionally exposes the `Service` on a fixed port on every cluster node;
+- `LoadBalancer` extends a `NodePort` `Service` by requesting the underlying infrastructure (typically a cloud provider) to provision an external load balancer that forwards traffic to the Service's `nodePort`.
+
+Sometimes you don't need load-balancing and a single Service IP.  
+In this case, you can create a Headless `Service`, by explicitly specifying
+
+```yaml
+spec:
+  clusterIP: None
+```
+
+With the headless `Service`, DNS queries for the Service name return the IP addresses of the individual Pods behind the `Service`, instead of a single virtual IP.  
+This is commonly used by `StatefulSets`, whose Pods also get a stable DNS name each, in the form `<pod-name>.<service-name>.<namespace>.svc.cluster.local`.  
+So the headless `Service` lets you communicate with an exact Pod instead of landing on a random one chosen by kube-proxy.  
+A use case for this type of service is when you have to deal with a stateful application; for example a database with a primary instance that allows writing and several replicas that allow only reading, where you need to choose which one to connect to based on whether you need to write or read data.
+
+For all types of `Service`:
+
+- inside `spec` we define the array `ports`. If we map only one port, the field `name` is optional; if we need to map two or more ports, the field `name` becomes mandatory;
+- when a `Service` with a `selector` is created, Kubernetes also automatically creates the objects that keep track of which Pods are the current endpoints of the service: one or more `EndpointSlice` objects (labeled `kubernetes.io/service-name=<service-name>`) and the legacy `Endpoints` object with the same name as the `Service`. These lists are automatically updated whenever matching Pods are created, deleted, or rescheduled (for example when they are restarted, scaled, or replaced), so that newly created Pods are added as endpoints and Pods that no longer exist are removed;
+- the `targetPort` should match the port on which the application inside the container is actually listening (or its name, if the container port is named);
+- when creating a `Service` (except headless and `ExternalName` ones), an IP address (called the Service's CLUSTER-IP) is assigned to it, allowing access from other workloads using either the assigned CLUSTER-IP or its name.
+
+> [!NOTE]
+>
+> The `Endpoints` API is deprecated since Kubernetes v1.33 in favor of `EndpointSlice` (`discovery.k8s.io/v1`), which kube-proxy already uses.  
+> `kubectl get endpoints <service-name>` still works but prints a deprecation warning; the modern equivalent is:
+>
+> ```bash
+> kubectl get endpointslices -l kubernetes.io/service-name=<service-name>
+> ```
+
+Here is an example of a `Service` of type `ClusterIP` with two ports, where the field `name` must be present for each port.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-service
+spec:
+  selector:
+    app.kubernetes.io/name: MyApp
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 9376
+    - name: https
+      protocol: TCP
+      port: 443
+      targetPort: 9377
+```
+
+Some commands:
+
+- `kubectl get services`: list the services with their status inside the default namespace;
+- `kubectl describe service <service-name>`: shows detailed information about the service, listing its endpoints (the IP addresses and ports of the selected Pods).
+- `kubectl get service -A`: retrieves all the services in all the namespaces;
+- `kubectl get service -n <namespace-name>`: retrieves all the services in a specific namespace.
+
+---
+
+### 6.2 Ingress
+
+#### Why do we need Ingress instead of exposing Services directly?
+
+With a Service, if we want to expose an application to the external world, we can use a Service of type `NodePort`.  
+NodePort exposes the Service on a high port of every node (by default in the 30000–32767 range). Although functional, this is generally not suitable for production because users must access non-standard ports and additional infrastructure is usually required to provide a stable HTTP/HTTPS entry point.  
+To remedy this, we could add a reverse proxy that accepts requests on port 80 and forwards them to the port exposed by the NodePort.  
+The reverse proxy provides the public entry point, handles HTTP/HTTPS traffic and forwards requests to the NodePort Service.  
+We can then point our DNS to this server and finally users are able to access the application by simply visiting the FQDN.  
+This is the typical setup when the application is hosted on-premises.
+
+```text
+             Internet
+                 │
+      www.my-online-store.com
+                 │
+       HTTP :80 / HTTPS :443
+                 │
+      +---------------------+
+      |   Reverse Proxy     |
+      |  (NGINX / HAProxy)  |
+      +---------------------+
+                 │
+           NodeIP:30080
+external infra   |
+════════════════════════════════════
+      Kubernetes | Cluster
+                 │
+         +--------------+
+         | Service (NP) |
+         |    :30080    |
+         +--------------+
+                 │
+    ┌────────────┼────────────┐
+    │            │            │
++-------+   +-------+     +-------+
+| Pod 1 |   | Pod 2 |     | Pod 3 |
++-------+   +-------+     +-------+
+```
+
+If instead we are on a public cloud environment, we use a Service of type `LoadBalancer` instead of `NodePort`.  
+The cloud provider automatically provisions an external load balancer that forwards traffic to the Service, typically through the NodePort automatically allocated for that Service.  
+The load balancer has an external IP (shown in the `EXTERNAL-IP` column of `kubectl get svc`) that can be provided to allow users to access the application.  
+We then set the DNS to point to this IP and users are finally able to access the application with the FQDN.
+
+```text
+             Internet
+                 │
+      www.my-online-store.com
+                 │
+       HTTP :80 / HTTPS :443
+                 │
+      +---------------------+
+      | Cloud Load Balancer |
+      | (AWS/GCP/Azure)     |
+      +---------------------+
+                 |
+            NodeIP:30080
+cloud provider   │
+════════════════════════════════════
+      Kubernetes | Cluster
+          +--------------+
+          | Service (LB) |
+          |    :30080    |
+          +--------------+
+                 │
+    ┌────────────┼────────────┐
+    │            │            │
++-------+    +-------+    +-------+
+| Pod 1 |    | Pod 2 |    | Pod 3 |
++-------+    +-------+    +-------+
+```
+
+If a new application in the same cluster needs to be exposed to the public on the same FQDN but a different URL, we then need:
+
+- on-premises: a new Service of type `NodePort` and another reverse proxy listening on a different port;
+- on a cloud provider: a new Service of type `LoadBalancer`, which provisions another load balancer with a different external IP and increases the costs.
+
+If both applications must be exposed under the same FQDN, something must inspect the incoming URL and decide where to send the request.  
+This requires an additional reverse proxy (or another load balancer) capable of URL-based routing.  
+Every time a new application is deployed, this external component must be reconfigured.  
+This means that routing configuration lives outside Kubernetes, making deployments harder to automate and maintain.
+
+> [!TIP]
+>
+> The routing may also be based on the requested host (for example shop.example.com and api.example.com) instead of the URL path.
+
+Finally, we also need to enable TLS (often still called SSL) for the applications, so the users can access them using HTTPS.  
+We can do this at different levels:
+
+- application level;
+- load balancer / proxy-server level.
+
+Managing TLS inside every application would require every development team to implement and maintain certificates independently.  
+Instead, it is preferable to terminate TLS at a single entry point, providing a consistent configuration for every application.
+
+We also need to configure firewall rules for every externally exposed service.
+
+```text
+                  Internet
+                      │
+          www.my-online-store.com
+                      │
+            HTTP :80 / HTTPS :443
+                      │
+    +-----------------------------------+
+    |        External Proxy / LB        |
+    |       (URL-based Routing)         |
+    |          /app1     /app2          |
+    +-----------------------------------+
+          │                        │
+  NodeIP:30080               NodeIP:30082
+          │   cloud provider       │
+══════════════════════════════════════════════
+          |   Kubernetes Cluster   |
+ +----------------+       +----------------+
+ | Service 1 (LB) |       | Service 2 (LB) |
+ |     :30080     |       |     :30082     |
+ +----------------+       +----------------+
+          │                        │
+    ┌─────┴─────┐            ┌─────┴─────┐
+    │           │            │           │
++-------+   +-------+    +-------+   +-------+
+| Pod 1 |   | Pod 2 |    | Pod 1 |   | Pod 2 |
++-------+   +-------+    +-------+   +-------+
+```
+
+Every new application requires:
+
+- another Service;
+- another externally exposed endpoint (LoadBalancer or reverse proxy);
+- additional firewall rules;
+- TLS (SSL) configuration;
+- DNS changes;
+- proxy configuration updates.
+
+All of this becomes difficult to manage as the number of applications grows.  
+Kubernetes addresses these challenges by introducing the `Ingress` resource, which centralizes the configuration of the external HTTP/HTTPS access.
+
+The Ingress Controller becomes the **single entry point for the HTTP/HTTPS traffic of the cluster**. Routing, TLS termination and virtual hosting are managed through Kubernetes Ingress resources instead of external infrastructure.
+
+```text
+                 Internet
+                     │
+         www.my-online-store.com
+                     │
+           HTTP :80 / HTTPS :443
+                     │
+══════════════════════════════════════════════
+Kubernetes Cluster   |
+          +--------------------+
+          | Service (NP or LB) |
+          +--------------------+
+                     │
+   +-----------------------------------+
+   |        Ingress Controller         |
+   +-----------------------------------+
+    /app1 |                  /app2 |
+ +-----------------+      +-----------------+
+ | Service 1 (CIP) |      | Service 2 (CIP) |
+ +-----------------+      +-----------------+
+          │                        │
+    ┌─────┴─────┐            ┌─────┴─────┐
+    │           │            │           │
++-------+   +-------+    +-------+   +-------+
+| Pod 1 |   | Pod 2 |    | Pod 1 |   | Pod 2 |
++-------+   +-------+    +-------+   +-------+
+```
+
+> [!NOTE]
+>
+> The Ingress Controller runs as Pods inside the cluster, so it is not directly reachable from the Internet either: it must be exposed with a Service of type `NodePort` or `LoadBalancer`, as in the diagram above.  
+> The Ingress resource itself is just configuration.
+>
+> Also note that most Ingress Controllers use the Services referenced by the Ingress only to discover their Pods (EndpointSlices), and then send the traffic directly to the Pod IPs, without going through the ClusterIP.
+
+| Without Ingress                     | With Ingress                               |
+| ----------------------------------- | ------------------------------------------ |
+| Multiple LoadBalancers              | Single LoadBalancer                        |
+| Multiple public IPs                 | Single public IP                           |
+| Proxy configured outside Kubernetes | Routing defined in Kubernetes manifests    |
+| TLS configured separately           | Centralized TLS termination                |
+| DNS/proxy changes for every app     | Only Ingress changes (+ DNS for new hosts) |
+| URL routing configured externally   | URL routing managed by Kubernetes          |
+
+> [!NOTE]
+>
+> An Ingress resource is only a set of routing rules stored in Kubernetes and does not receive network traffic by itself.  
+> An Ingress Controller (such as the NGINX Ingress Controller or Traefik) is the component responsible for implementing those rules.
+
+#### Ingress and Ingress Controller
+
+Think of Ingress as a Layer 7 (HTTP/HTTPS) load balancer that runs inside the Kubernetes cluster and can be configured using native Kubernetes primitives.  
+Only the Ingress API is built into Kubernetes, though: the component that implements it, the Ingress Controller, must be installed separately.  
+Ingress handles only HTTP and HTTPS: to expose other protocols or ports (for example a database on TCP port 5432) we still use Services of type `NodePort` or `LoadBalancer`.
+
+In order to implement Ingresses, you need two elements:
+
+- **Ingress Controller**: deploy a reverse proxy or a load balancing solution on the Kubernetes Cluster;
+- **Ingress resources**: define the configuration (routes, certificates, etc.) in `Ingress` Kubernetes manifests.
+
+> [!NOTE]
+>
+> If you simply create Ingress resources (without deploying an Ingress controller) they won't work.  
+> A Kubernetes cluster does not come with an Ingress Controller by default (some distributions install one: k3s, for example, ships with Traefik).
+
+There are many available solutions for Ingress controller like NGINX, HAProxy, Traefik, GCE (Google Layer 7 Load Balancer), Contour.  
+The Kubernetes project itself supports and maintains only the AWS (AWS Load Balancer Controller) and GCE ingress controllers; all the others are third-party projects.
+
+> [!WARNING]
+>
+> The community **Ingress NGINX** controller (`kubernetes/ingress-nginx`), used in the examples below and in most courses, has been **retired**:
+>
+> - best-effort maintenance ended in March 2026 (the last releases, published on March 20, 2026, are the controller versions v1.15.1, v1.14.5 and v1.13.9);
+> - there are no further releases, bugfixes or security fixes, and its repositories are read-only;
+> - existing installations keep working and the images and Helm charts remain available, but the Kubernetes project recommends migrating to the Gateway API or to another Ingress controller.
+>
+> Don't confuse it with the **NGINX Ingress Controller** by F5/NGINX (`nginx/kubernetes-ingress`), which is a different project.
+>
+> The `Ingress` API itself is GA and frozen: it will not get new features, but there are no plans to remove it.  
+> For new setups the Kubernetes project recommends the Gateway API, but the CKAD curriculum still includes "Use Ingress rules to expose applications".
+
+Keep in mind that the load balancer component is just a part of Ingress Controllers.  
+Ingress Controllers have additional intelligence to watch the Kubernetes API for Ingress resources (and for the Services, EndpointSlices and Secrets they reference) and reconfigure the underlying proxy accordingly.
+
+#### Simplified architecture of an Ingress Controller
+
+> [!NOTE]
+>
+> Modern Kubernetes clusters usually install Ingress Controllers using Helm charts or vendor-provided manifests.  
+> The following Deployment is intentionally simplified to illustrate the components involved.  
+> For comparison, the official static manifest of ingress-nginx contains 19 objects (Namespace, ServiceAccounts, Roles, ClusterRoles and bindings, ConfigMap, Services, Deployment, IngressClass and a validating admission webhook with its Jobs).
+
+In the following example we'll use the community NGINX Ingress Controller (retired, but still a good example of the components involved).  
+The NGINX controller is deployed just like any other Deployment in Kubernetes.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-ingress-controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: nginx-ingress
+  template:
+    metadata:
+      labels:
+        name: nginx-ingress
+    spec:
+      serviceAccountName: nginx-ingress-serviceaccount
+      containers:
+      - name: nginx-ingress-controller
+        image: registry.k8s.io/ingress-nginx/controller:v1.15.1
+        args:
+        - /nginx-ingress-controller
+        - --configmap=$(POD_NAMESPACE)/nginx-configuration
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - name: http
+          containerPort: 80
+        - name: https
+          containerPort: 443
+```
+
+We also pass two environment variables carrying the Pod's own name and namespace, read through the Downward API (`fieldRef`).  
+The controller refuses to start without them, because it uses them to find its own Pod: for example, it creates its leader-election lock in its own namespace, and it uses its labels to find the other controller Pods and publish their address in the `status` of the Ingresses.  
+In `args`, `$(POD_NAMESPACE)` is replaced by Kubernetes with the value of the environment variable, so `--configmap` points to the `nginx-configuration` ConfigMap in the controller's own namespace.
+
+Finally, we specify the ports used by the Ingress Controller, which are `80` and `443`.  
+With `serviceAccountName` we also assign the ServiceAccount that gives the controller its permissions (see below).
+
+We also add an empty ConfigMap, which can later be used to pass global configuration values (like `error-log-path`, `keep-alive` and `ssl-protocols`).
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-configuration
+```
+
+In order to expose the Ingress Controller externally, we add a `Service` of type `NodePort` (`LoadBalancer` on a cloud provider) with the selector pointing to the label of the controller Pods.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-ingress
+spec:
+  type: NodePort
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  - port: 443
+    targetPort: 443
+    protocol: TCP
+    name: https
+  selector:
+    name: nginx-ingress
+```
+
+As said before, the Ingress Controller can monitor the cluster and configure the underlying NGINX server when something changes.  
+But in order for the Ingress Controller to do this, we need a `ServiceAccount` with the right set of permissions, granted with `ClusterRoles`/`Roles` and `ClusterRoleBindings`/`RoleBindings`: for example reading Ingresses, IngressClasses, Services, EndpointSlices, Secrets (the TLS certificates) and ConfigMaps, updating the `ingresses/status` subresource, creating Events and using a Lease for leader election.
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nginx-ingress-serviceaccount
+```
+
+All these objects must be created in the controller's namespace, starting from the ServiceAccount: if it doesn't exist yet, the ReplicaSet cannot create the Pods (`error looking up service account ...`) and keeps retrying until it is created.
+
+```bash
+kubectl create -f nginx-ingress-serviceaccount.yaml    # plus the Roles/ClusterRoles and their bindings
+kubectl create -f nginx-configuration.yaml
+kubectl create -f nginx-ingress-controller.yaml
+kubectl create -f nginx-ingress.yaml
+```
+
+The Ingresses of the next section also reference the IngressClass `nginx` (see the IngressClass section), which must exist as well.
+
+#### Ingress resources
+
+Let's now define some Ingress rules on the Ingress Controller via `Ingress` resources.  
+An Ingress must be created in the same namespace as the Services it references (a backend refers to a Service only by name), while the controller usually runs in its own namespace and watches the Ingresses of all namespaces.
+
+You can create Ingress rules to, for example:
+
+- simply forward Ingress traffic to a single application;
+- route traffic to different applications based on URLs;
+- route traffic to different applications based on the domain name (FQDN).
+
+In the first case, the section `defaultBackend` defines where the traffic is routed to.  
+Considering that it's a single backend, we don't need any specific rule; simply specifying service name and port is enough (an Ingress must contain at least `rules` or `defaultBackend`).
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-wear
+spec:
+  ingressClassName: nginx
+  defaultBackend:
+    service:
+      name: wear-service
+      port:
+        number: 80
+```
+
+```bash
+kubectl create -f ingress-wear.yaml
+# or, imperatively
+kubectl create ingress ingress-wear --class=nginx --default-backend=wear-service:80
+```
+
+Now we can retrieve the created Ingress:
+
+```console
+$ kubectl get ingress
+NAME           CLASS   HOSTS   ADDRESS   PORTS   AGE
+ingress-wear   nginx   *                 80      32s
+```
+
+The `ADDRESS` column is empty until an Ingress Controller handles the Ingress and publishes its address in the `status` of the Ingress.
+
+If instead we want to route traffic to different Services based on the URL path, we can use a single rule with multiple paths:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-wear-watch
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /wear
+        pathType: Prefix
+        backend:
+          service:
+            name: wear-service
+            port:
+              number: 80
+      - path: /watch
+        pathType: Prefix
+        backend:
+          service:
+            name: watch-service
+            port:
+              number: 80
+```
+
+The available path types are the following:
+
+| pathType               | Meaning                                                                                                                          |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Exact                  | Matches the exact URL path (case-sensitive): `/wear` does not match `/wear/`                                                     |
+| Prefix                 | Matches element by element, splitting the path by `/`: `/wear` matches `/wear`, `/wear/` and `/wear/shirts`, but not `/wearable` |
+| ImplementationSpecific | Matching depends on the IngressClass (controller-dependent)                                                                      |
+
+> [!IMPORTANT]
+>
+> `pathType` is required: without it the Ingress is rejected (`pathType: Required value: pathType must be specified`); with `Exact` and `Prefix` the path must start with `/`.  
+> If several paths match a request, the longest one wins; with paths of the same length, `Exact` wins over `Prefix`.
+>
+> The path is forwarded to the backend unchanged: a request for `/wear/shirts` reaches `wear-service` as `/wear/shirts`, so the application must serve the `/wear` prefix (or the path must be rewritten, see the Additional options section).
+
+```bash
+kubectl create -f ingress-wear-watch.yaml
+# or, imperatively
+kubectl create ingress ingress-wear-watch --class=nginx --rule="/wear*=wear-service:80" --rule="/watch*=watch-service:80"
+```
+
+We now see two backend URLs under the `Rules` section.
+
+```console
+$ kubectl describe ingress ingress-wear-watch
+Name:             ingress-wear-watch
+Labels:           <none>
+Namespace:        default
+Address:
+Ingress Class:    nginx
+Default backend:  <default>
+Rules:
+  Host        Path  Backends
+  ----        ----  --------
+  *
+              /wear    wear-service:80 (<error: services "wear-service" not found>)
+              /watch   watch-service:80 (<error: services "watch-service" not found>)
+Annotations:  <none>
+Events:       <none>
+```
+
+Since the Services don't exist yet, the backends show `<error: services "..." not found>`; once they exist, `describe` shows the endpoints (Pod IP and port) of each backend:
+
+```console
+Rules:
+  Host        Path  Backends
+  ----        ----  --------
+  *
+              /wear    wear-service:80 (10.244.0.209:80)
+              /watch   watch-service:80 (10.244.0.210:80)
+```
+
+You can also notice that the `Default backend` field shows `<default>`, indicating that none has been explicitly configured.  
+We can specify the `defaultBackend`, which defines the backend that receives traffic that does not match any of the rules.  
+If omitted, the handling of unmatched requests is up to the Ingress Controller: typically they receive a 404 response generated by the controller itself.  
+Controllers differ here: for example ingress-nginx also uses the `defaultBackend` of an Ingress for the unmatched paths of the hosts defined in it, while Traefik applies `spec.defaultBackend` only to Ingresses without rules.
+
+The third configuration option uses domain names or host names.  
+In this case we create 2 rules (one for each domain) and we add the field `host` to each rule.  
+Since each host serves a whole application, the path is `/`, which with `pathType: Prefix` matches every path.
+
+> [!CAUTION]
+>
+> URL-based routing usually uses a single rule containing multiple paths.  
+> Host-based routing instead uses one rule for each host.  
+> A rule without `host` applies to all hosts (`*` in `kubectl get` and `kubectl describe`).
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-wear-watch
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: wear.my-online-store.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: wear-service
+            port:
+              number: 80
+  - host: watch.my-online-store.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: watch-service
+            port:
+              number: 80
+```
+
+```bash
+kubectl create ingress ingress-wear-watch --class=nginx \
+  --rule="wear.my-online-store.com/*=wear-service:80" \
+  --rule="watch.my-online-store.com/*=watch-service:80"
+```
+
+If the path were `/wear`, only the requests for `/wear` and `/wear/...` of `wear.my-online-store.com` would be routed, while `http://wear.my-online-store.com/` would receive a 404.
+
+> [!TIP]
+>
+> A host can also be a wildcard: `*.my-online-store.com` matches `wear.my-online-store.com`, but neither `my-online-store.com` nor `a.wear.my-online-store.com` (the wildcard covers a single DNS label).  
+> An IP address is not allowed as host (`must be a DNS name, not an IP address`).
+
+You can also add TLS to an Ingress:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tls-example-ingress
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+      - https-example.foo.com
+    secretName: testsecret-tls
+  rules:
+  - host: https-example.foo.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: service1
+            port:
+              number: 80
+```
+
+Keep in mind that:
+
+- the `hosts` in the `tls` section must match the `host` of the rules (TLS does not work on a rule without host);
+- TLS is terminated by the Ingress Controller, on port 443 only: the traffic from the controller to the Pods is plain HTTP;
+- the Secret must be in the same namespace as the Ingress.
+
+The certificate is retrieved from a Secret of type `kubernetes.io/tls` that must contain the keys `tls.crt` and `tls.key`:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: testsecret-tls
+  namespace: default
+data:
+  tls.crt: base64 encoded cert
+  tls.key: base64 encoded key
+type: kubernetes.io/tls
+```
+
+Instead of writing it by hand, it's quicker to create it from the certificate and key files (`kubectl` also checks that the key matches the certificate):
+
+```bash
+kubectl create secret tls testsecret-tls --cert=tls.crt --key=tls.key
+```
+
+```console
+$ kubectl get ingress tls-example-ingress
+NAME                  CLASS   HOSTS                   ADDRESS   PORTS     AGE
+tls-example-ingress   nginx   https-example.foo.com             80, 443   20s
+```
+
+#### IngressClass
+
+In modern Kubernetes clusters, multiple Ingress Controllers may coexist (for example NGINX, Traefik, HAProxy).  
+Each controller watches only the Ingress resources that belong to its own class.
+
+An `IngressClass` is a cluster-scoped resource that identifies which Ingress Controller should implement a given Ingress resource.  
+An `Ingress` references it through the field:
+
+```yaml
+spec:
+  ingressClassName: nginx
+```
+
+for example:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: nginx
+spec:
+  controller: k8s.io/ingress-nginx
+```
+
+The `controller` field identifies the controller implementation: `k8s.io/ingress-nginx` is the default value used by the community ingress-nginx controller.
+
+```console
+$ kubectl get ingressclass
+NAME    CONTROLLER             PARAMETERS   AGE
+nginx   k8s.io/ingress-nginx   <none>       20s
+```
+
+The corresponding Ingress then becomes:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+spec:
+  ingressClassName: nginx
+  rules:
+  ...
+```
+
+```text
+           Ingress
+  ingressClassName: nginx
+             │
+             ▼
+     +----------------+
+     | IngressClass   |
+     |     nginx      |
+     +----------------+
+             │
+             ▼
++---------------------------+
+| NGINX Ingress Controller  |
++---------------------------+
+```
+
+> [!NOTE]
+>
+> Before Kubernetes v1.18 it was common to specify the controller through the annotation
+>
+> ```yaml
+> kubernetes.io/ingress.class: nginx
+> ```
+>
+> This annotation is now deprecated in favour of the `ingressClassName` field.  
+> The API server still accepts it, but returns a warning:
+>
+> ```console
+> Warning: annotation "kubernetes.io/ingress.class" is deprecated, please use 'spec.ingressClassName' instead
+> ```
+
+If an `Ingress` does not specify an `ingressClassName`:
+
+- if an IngressClass is marked as the default class, the `DefaultIngressClass` admission controller writes its name in the `spec.ingressClassName` of the new Ingress (the existing Ingresses are not updated);
+- otherwise the Ingress remains without a class, and whether a controller handles it depends on how the controller is configured (ingress-nginx, for example, ignores it unless it is started with `--watch-ingress-without-class`).
+
+An IngressClass is marked as default with the annotation `ingressclass.kubernetes.io/is-default-class: "true"`:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: nginx
+  annotations:
+    ingressclass.kubernetes.io/is-default-class: "true"
+spec:
+  controller: k8s.io/ingress-nginx
+```
+
+```bash
+# or, on an existing IngressClass
+kubectl annotate ingressclass nginx ingressclass.kubernetes.io/is-default-class=true
+```
+
+> [!CAUTION]
+>
+> Mark only one IngressClass as default.  
+> According to the documentation, with more than one default class the new Ingresses without `ingressClassName` are rejected; current versions (verified on v1.34) instead assign the most recently created default class.
+
+#### Additional options
+
+Different Ingress Controllers have different options that can be used to customize how they work.
+
+For example, the [NGINX Ingress Controller has many options](https://kubernetes.github.io/ingress-nginx/examples/), which can be set as command-line arguments of the controller, as global settings in its ConfigMap or for a single Ingress through annotations.
+
+One useful argument to pass to the NGINX Ingress Controller allows the controller to route unmatched requests to a default `Service` (instead of its built-in 404 response), even if no default backend is defined in the `Ingress` resources.
+
+```yaml
+        args:
+        - --default-backend-service=<namespace>/<service>
+```
+
+Some common examples of annotations for the NGINX Ingress Controller are:
+
+| Annotation                                    | Purpose                                                                                               |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `nginx.ingress.kubernetes.io/rewrite-target`  | Rewrites the request path before forwarding it to the backend Service                                 |
+| `nginx.ingress.kubernetes.io/use-regex`       | Treats the paths of the Ingress as regular expressions                                                |
+| `nginx.ingress.kubernetes.io/ssl-redirect`    | Redirects HTTP requests to HTTPS (enabled by default when the Ingress has TLS; `"false"` disables it) |
+| `nginx.ingress.kubernetes.io/proxy-body-size` | Sets the maximum accepted request body size                                                           |
+
+These annotations are specific to the NGINX Ingress Controller. Other Ingress Controllers may use different annotations or configuration mechanisms.
+
+`rewrite-target` is often needed because, as seen before, the path is forwarded to the backend unchanged: an application that expects requests on `/` would receive `/wear` and probably answer with a 404.  
+With the regular expression capture groups (example from the ingress-nginx documentation), the part of the path after `/wear` is passed to the backend as `$2`:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-wear-rewrite
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  rules:
+  - http:
+      paths:
+      - path: /wear(/|$)(.*)
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: wear-service
+            port:
+              number: 80
+```
+
+| Request path   | Path received by `wear-service` |
+| -------------- | ------------------------------- |
+| `/wear`        | `/`                             |
+| `/wear/`       | `/`                             |
+| `/wear/shirts` | `/shirts`                       |
+
+The simpler `nginx.ingress.kubernetes.io/rewrite-target: /` (found in many older examples) replaces the whole path with `/`: `/wear/shirts` would also reach the backend as `/`.
+
+Useful commands:
+
+- `kubectl create ingress <ingress-name> --class=<class> --rule="host/path=service:port"`: template for creating an Ingress imperatively. A path ending with `*` gets `pathType: Prefix`, otherwise `pathType: Exact`; the host can be omitted (`--rule="/path*=service:port"`); `,tls=<secret>` at the end of a rule enables TLS for its host (`,tls` alone uses the controller's default certificate); `--default-backend=service:port` and `--annotation key=value` set the default backend and the annotations;
+- `kubectl create ingress ingress-test --class=nginx --rule="wear.my-online-store.com/wear*=wear-service:80"`: creates an Ingress that routes requests for `wear.my-online-store.com` whose path is `/wear` or starts with `/wear/` to the `wear-service` Service on port 80;
+- `kubectl get ingress` (short name `ing`) and `kubectl describe ingress <ingress-name>`: list the Ingresses and show the details of one of them;
+- `kubectl get ingressclass`: lists the IngressClasses of the cluster;
+- `kubectl create secret tls <secret-name> --cert=<cert file> --key=<key file>`: creates the TLS Secret for an Ingress;
+- `curl -H "Host: wear.my-online-store.com" http://<node IP>:<node port>/`: tests a host-based rule without DNS, sending the request to the NodePort of the Ingress Controller with the right `Host` header.
+
+---
+
+### 6.3 Network Policies
+
+#### Description of Ingress and Egress in non-Kubernetes environments
 
 Network traffic can be viewed from two perspectives: **ingress** (incoming traffic) and **egress** (outgoing traffic).
 
@@ -4017,11 +4010,9 @@ If we were to list the necessary rules to make this system work, we would have:
 > [!NOTE]
 >
 > Here "ingress" and "egress" only describe the direction of the traffic, as seen by a specific component.  
-> They have nothing to do with the Kubernetes `Ingress` resource described in the next chapter.
+> They have nothing to do with the Kubernetes `Ingress` resource.
 
----
-
-### Need for Network Policies in Kubernetes environments
+#### Need for Network Policies in Kubernetes environments
 
 In Kubernetes, each `Node` and each `Pod` has its own IP address, and most `Services` also get a virtual IP address, the ClusterIP.  
 One of the requirements of the Kubernetes network model is that, whatever solution is implemented, Pods must be able to communicate with each other without any additional configuration (like routes).  
@@ -4047,9 +4038,7 @@ Coming back to the example in the previous section, in order to reach that archi
 However, since by default all Pods can talk to each other, the front-end Pod would also be able to communicate directly with the database Pod.  
 If we want to avoid that (maybe the security team or an audit requires preventing this from happening), that is where we would implement a **Network Policy** to allow traffic to the database Pod only from the API Pod.
 
----
-
-### Network Policies in Kubernetes environments
+#### Network Policies in Kubernetes environments
 
 A `NetworkPolicy` (API group `networking.k8s.io/v1`) is a namespaced Kubernetes resource that defines which network connections are allowed to and/or from a selected set of Pods.  
 In order to apply a `NetworkPolicy` to a Pod we use labels and selectors: we label the Pod and we use the same label in the `spec.podSelector` field of the `NetworkPolicy`.  
@@ -4409,764 +4398,9 @@ Useful commands:
 
 ---
 
-## Ingress Networking
+## Part 7 – Storage
 
-### Why do we need Ingress instead of exposing Services directly?
-
-With a Service, if we want to expose an application to the external world, we can use a Service of type `NodePort`.  
-NodePort exposes the Service on a high port of every node (by default in the 30000–32767 range). Although functional, this is generally not suitable for production because users must access non-standard ports and additional infrastructure is usually required to provide a stable HTTP/HTTPS entry point.  
-To remedy this, we could add a reverse proxy that accepts requests on port 80 and forwards them to the port exposed by the NodePort.  
-The reverse proxy provides the public entry point, handles HTTP/HTTPS traffic and forwards requests to the NodePort Service.  
-We can then point our DNS to this server and finally users are able to access the application by simply visiting the FQDN.  
-This is the typical setup when the application is hosted on-premises.
-
-```text
-             Internet
-                 │
-      www.my-online-store.com
-                 │
-       HTTP :80 / HTTPS :443
-                 │
-      +---------------------+
-      |   Reverse Proxy     |
-      |  (NGINX / HAProxy)  |
-      +---------------------+
-                 │
-           NodeIP:30080
-external infra   |
-════════════════════════════════════
-      Kubernetes | Cluster
-                 │
-         +--------------+
-         | Service (NP) |
-         |    :30080    |
-         +--------------+
-                 │
-    ┌────────────┼────────────┐
-    │            │            │
-+-------+   +-------+     +-------+
-| Pod 1 |   | Pod 2 |     | Pod 3 |
-+-------+   +-------+     +-------+
-```
-
-If instead we are on a public cloud environment, we use a Service of type `LoadBalancer` instead of `NodePort`.  
-The cloud provider automatically provisions an external load balancer that forwards traffic to the Service, typically through the NodePort automatically allocated for that Service.  
-The load balancer has an external IP (shown in the `EXTERNAL-IP` column of `kubectl get svc`) that can be provided to allow users to access the application.  
-We then set the DNS to point to this IP and users are finally able to access the application with the FQDN.
-
-```text
-             Internet
-                 │
-      www.my-online-store.com
-                 │
-       HTTP :80 / HTTPS :443
-                 │
-      +---------------------+
-      | Cloud Load Balancer |
-      | (AWS/GCP/Azure)     |
-      +---------------------+
-                 |
-            NodeIP:30080
-cloud provider   │
-════════════════════════════════════
-      Kubernetes | Cluster
-          +--------------+
-          | Service (LB) |
-          |    :30080    |
-          +--------------+
-                 │
-    ┌────────────┼────────────┐
-    │            │            │
-+-------+    +-------+    +-------+
-| Pod 1 |    | Pod 2 |    | Pod 3 |
-+-------+    +-------+    +-------+
-```
-
-If a new application in the same cluster needs to be exposed to the public on the same FQDN but a different URL, we then need:
-
-- on-premises: a new Service of type `NodePort` and another reverse proxy listening on a different port;
-- on a cloud provider: a new Service of type `LoadBalancer`, which provisions another load balancer with a different external IP and increases the costs.
-
-If both applications must be exposed under the same FQDN, something must inspect the incoming URL and decide where to send the request.  
-This requires an additional reverse proxy (or another load balancer) capable of URL-based routing.  
-Every time a new application is deployed, this external component must be reconfigured.  
-This means that routing configuration lives outside Kubernetes, making deployments harder to automate and maintain.
-
-> [!TIP]
->
-> The routing may also be based on the requested host (for example shop.example.com and api.example.com) instead of the URL path.
-
-Finally, we also need to enable TLS (often still called SSL) for the applications, so the users can access them using HTTPS.  
-We can do this at different levels:
-
-- application level;
-- load balancer / proxy-server level.
-
-Managing TLS inside every application would require every development team to implement and maintain certificates independently.  
-Instead, it is preferable to terminate TLS at a single entry point, providing a consistent configuration for every application.
-
-We also need to configure firewall rules for every externally exposed service.
-
-```text
-                  Internet
-                      │
-          www.my-online-store.com
-                      │
-            HTTP :80 / HTTPS :443
-                      │
-    +-----------------------------------+
-    |        External Proxy / LB        |
-    |       (URL-based Routing)         |
-    |          /app1     /app2          |
-    +-----------------------------------+
-          │                        │
-  NodeIP:30080               NodeIP:30082
-          │   cloud provider       │
-══════════════════════════════════════════════
-          |   Kubernetes Cluster   |
- +----------------+       +----------------+
- | Service 1 (LB) |       | Service 2 (LB) |
- |     :30080     |       |     :30082     |
- +----------------+       +----------------+
-          │                        │
-    ┌─────┴─────┐            ┌─────┴─────┐
-    │           │            │           │
-+-------+   +-------+    +-------+   +-------+
-| Pod 1 |   | Pod 2 |    | Pod 1 |   | Pod 2 |
-+-------+   +-------+    +-------+   +-------+
-```
-
-Every new application requires:
-
-- another Service;
-- another externally exposed endpoint (LoadBalancer or reverse proxy);
-- additional firewall rules;
-- TLS (SSL) configuration;
-- DNS changes;
-- proxy configuration updates.
-
-All of this becomes difficult to manage as the number of applications grows.  
-Kubernetes addresses these challenges by introducing the `Ingress` resource, which centralizes the configuration of the external HTTP/HTTPS access.
-
-The Ingress Controller becomes the **single entry point for the HTTP/HTTPS traffic of the cluster**. Routing, TLS termination and virtual hosting are managed through Kubernetes Ingress resources instead of external infrastructure.
-
-```text
-                 Internet
-                     │
-         www.my-online-store.com
-                     │
-           HTTP :80 / HTTPS :443
-                     │
-══════════════════════════════════════════════
-Kubernetes Cluster   |
-          +--------------------+
-          | Service (NP or LB) |
-          +--------------------+
-                     │
-   +-----------------------------------+
-   |        Ingress Controller         |
-   +-----------------------------------+
-    /app1 |                  /app2 |
- +-----------------+      +-----------------+
- | Service 1 (CIP) |      | Service 2 (CIP) |
- +-----------------+      +-----------------+
-          │                        │
-    ┌─────┴─────┐            ┌─────┴─────┐
-    │           │            │           │
-+-------+   +-------+    +-------+   +-------+
-| Pod 1 |   | Pod 2 |    | Pod 1 |   | Pod 2 |
-+-------+   +-------+    +-------+   +-------+
-```
-
-> [!NOTE]
->
-> The Ingress Controller runs as Pods inside the cluster, so it is not directly reachable from the Internet either: it must be exposed with a Service of type `NodePort` or `LoadBalancer`, as in the diagram above.  
-> The Ingress resource itself is just configuration.
->
-> Also note that most Ingress Controllers use the Services referenced by the Ingress only to discover their Pods (EndpointSlices), and then send the traffic directly to the Pod IPs, without going through the ClusterIP.
-
-| Without Ingress                     | With Ingress                               |
-| ----------------------------------- | ------------------------------------------ |
-| Multiple LoadBalancers              | Single LoadBalancer                        |
-| Multiple public IPs                 | Single public IP                           |
-| Proxy configured outside Kubernetes | Routing defined in Kubernetes manifests    |
-| TLS configured separately           | Centralized TLS termination                |
-| DNS/proxy changes for every app     | Only Ingress changes (+ DNS for new hosts) |
-| URL routing configured externally   | URL routing managed by Kubernetes          |
-
-> [!NOTE]
->
-> An Ingress resource is only a set of routing rules stored in Kubernetes and does not receive network traffic by itself.  
-> An Ingress Controller (such as the NGINX Ingress Controller or Traefik) is the component responsible for implementing those rules.
-
----
-
-### Ingress and Ingress Controller
-
-Think of Ingress as a Layer 7 (HTTP/HTTPS) load balancer that runs inside the Kubernetes cluster and can be configured using native Kubernetes primitives.  
-Only the Ingress API is built into Kubernetes, though: the component that implements it, the Ingress Controller, must be installed separately.  
-Ingress handles only HTTP and HTTPS: to expose other protocols or ports (for example a database on TCP port 5432) we still use Services of type `NodePort` or `LoadBalancer`.
-
-In order to implement Ingresses, you need two elements:
-
-- **Ingress Controller**: deploy a reverse proxy or a load balancing solution on the Kubernetes Cluster;
-- **Ingress resources**: define the configuration (routes, certificates, etc.) in `Ingress` Kubernetes manifests.
-
-> [!NOTE]
->
-> If you simply create Ingress resources (without deploying an Ingress controller) they won't work.  
-> A Kubernetes cluster does not come with an Ingress Controller by default (some distributions install one: k3s, for example, ships with Traefik).
-
-There are many available solutions for Ingress controller like NGINX, HAProxy, Traefik, GCE (Google Layer 7 Load Balancer), Contour.  
-The Kubernetes project itself supports and maintains only the AWS (AWS Load Balancer Controller) and GCE ingress controllers; all the others are third-party projects.
-
-> [!WARNING]
->
-> The community **Ingress NGINX** controller (`kubernetes/ingress-nginx`), used in the examples below and in most courses, has been **retired**:
->
-> - best-effort maintenance ended in March 2026 (the last releases, published on March 20, 2026, are the controller versions v1.15.1, v1.14.5 and v1.13.9);
-> - there are no further releases, bugfixes or security fixes, and its repositories are read-only;
-> - existing installations keep working and the images and Helm charts remain available, but the Kubernetes project recommends migrating to the Gateway API or to another Ingress controller.
->
-> Don't confuse it with the **NGINX Ingress Controller** by F5/NGINX (`nginx/kubernetes-ingress`), which is a different project.
->
-> The `Ingress` API itself is GA and frozen: it will not get new features, but there are no plans to remove it.  
-> For new setups the Kubernetes project recommends the Gateway API, but the CKAD curriculum still includes "Use Ingress rules to expose applications".
-
-Keep in mind that the load balancer component is just a part of Ingress Controllers.  
-Ingress Controllers have additional intelligence to watch the Kubernetes API for Ingress resources (and for the Services, EndpointSlices and Secrets they reference) and reconfigure the underlying proxy accordingly.
-
----
-
-### Simplified architecture of an Ingress Controller
-
-> [!NOTE]
->
-> Modern Kubernetes clusters usually install Ingress Controllers using Helm charts or vendor-provided manifests.  
-> The following Deployment is intentionally simplified to illustrate the components involved.  
-> For comparison, the official static manifest of ingress-nginx contains 19 objects (Namespace, ServiceAccounts, Roles, ClusterRoles and bindings, ConfigMap, Services, Deployment, IngressClass and a validating admission webhook with its Jobs).
-
-In the following example we'll use the community NGINX Ingress Controller (retired, but still a good example of the components involved).  
-The NGINX controller is deployed just like any other Deployment in Kubernetes.
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: nginx-ingress-controller
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      name: nginx-ingress
-  template:
-    metadata:
-      labels:
-        name: nginx-ingress
-    spec:
-      serviceAccountName: nginx-ingress-serviceaccount
-      containers:
-      - name: nginx-ingress-controller
-        image: registry.k8s.io/ingress-nginx/controller:v1.15.1
-        args:
-        - /nginx-ingress-controller
-        - --configmap=$(POD_NAMESPACE)/nginx-configuration
-        env:
-        - name: POD_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: POD_NAMESPACE
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
-        ports:
-        - name: http
-          containerPort: 80
-        - name: https
-          containerPort: 443
-```
-
-We also pass two environment variables carrying the Pod's own name and namespace, read through the Downward API (`fieldRef`).  
-The controller refuses to start without them, because it uses them to find its own Pod: for example, it creates its leader-election lock in its own namespace, and it uses its labels to find the other controller Pods and publish their address in the `status` of the Ingresses.  
-In `args`, `$(POD_NAMESPACE)` is replaced by Kubernetes with the value of the environment variable, so `--configmap` points to the `nginx-configuration` ConfigMap in the controller's own namespace.
-
-Finally, we specify the ports used by the Ingress Controller, which are `80` and `443`.  
-With `serviceAccountName` we also assign the ServiceAccount that gives the controller its permissions (see below).
-
-We also add an empty ConfigMap, which can later be used to pass global configuration values (like `error-log-path`, `keep-alive` and `ssl-protocols`).
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: nginx-configuration
-```
-
-In order to expose the Ingress Controller externally, we add a `Service` of type `NodePort` (`LoadBalancer` on a cloud provider) with the selector pointing to the label of the controller Pods.
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: nginx-ingress
-spec:
-  type: NodePort
-  ports:
-  - port: 80
-    targetPort: 80
-    protocol: TCP
-    name: http
-  - port: 443
-    targetPort: 443
-    protocol: TCP
-    name: https
-  selector:
-    name: nginx-ingress
-```
-
-As said before, the Ingress Controller can monitor the cluster and configure the underlying NGINX server when something changes.  
-But in order for the Ingress Controller to do this, we need a `ServiceAccount` with the right set of permissions, granted with `ClusterRoles`/`Roles` and `ClusterRoleBindings`/`RoleBindings`: for example reading Ingresses, IngressClasses, Services, EndpointSlices, Secrets (the TLS certificates) and ConfigMaps, updating the `ingresses/status` subresource, creating Events and using a Lease for leader election.
-
-```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: nginx-ingress-serviceaccount
-```
-
-All these objects must be created in the controller's namespace, starting from the ServiceAccount: if it doesn't exist yet, the ReplicaSet cannot create the Pods (`error looking up service account ...`) and keeps retrying until it is created.
-
-```bash
-kubectl create -f nginx-ingress-serviceaccount.yaml    # plus the Roles/ClusterRoles and their bindings
-kubectl create -f nginx-configuration.yaml
-kubectl create -f nginx-ingress-controller.yaml
-kubectl create -f nginx-ingress.yaml
-```
-
-The Ingresses of the next section also reference the IngressClass `nginx` (see the IngressClass section), which must exist as well.
-
----
-
-### Ingress resources
-
-Let's now define some Ingress rules on the Ingress Controller via `Ingress` resources.  
-An Ingress must be created in the same namespace as the Services it references (a backend refers to a Service only by name), while the controller usually runs in its own namespace and watches the Ingresses of all namespaces.
-
-You can create Ingress rules to, for example:
-
-- simply forward Ingress traffic to a single application;
-- route traffic to different applications based on URLs;
-- route traffic to different applications based on the domain name (FQDN).
-
-In the first case, the section `defaultBackend` defines where the traffic is routed to.  
-Considering that it's a single backend, we don't need any specific rule; simply specifying service name and port is enough (an Ingress must contain at least `rules` or `defaultBackend`).
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: ingress-wear
-spec:
-  ingressClassName: nginx
-  defaultBackend:
-    service:
-      name: wear-service
-      port:
-        number: 80
-```
-
-```bash
-kubectl create -f ingress-wear.yaml
-# or, imperatively
-kubectl create ingress ingress-wear --class=nginx --default-backend=wear-service:80
-```
-
-Now we can retrieve the created Ingress:
-
-```console
-$ kubectl get ingress
-NAME           CLASS   HOSTS   ADDRESS   PORTS   AGE
-ingress-wear   nginx   *                 80      32s
-```
-
-The `ADDRESS` column is empty until an Ingress Controller handles the Ingress and publishes its address in the `status` of the Ingress.
-
-If instead we want to route traffic to different Services based on the URL path, we can use a single rule with multiple paths:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: ingress-wear-watch
-spec:
-  ingressClassName: nginx
-  rules:
-  - http:
-      paths:
-      - path: /wear
-        pathType: Prefix
-        backend:
-          service:
-            name: wear-service
-            port:
-              number: 80
-      - path: /watch
-        pathType: Prefix
-        backend:
-          service:
-            name: watch-service
-            port:
-              number: 80
-```
-
-The available path types are the following:
-
-| pathType               | Meaning                                                                                                                          |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Exact                  | Matches the exact URL path (case-sensitive): `/wear` does not match `/wear/`                                                     |
-| Prefix                 | Matches element by element, splitting the path by `/`: `/wear` matches `/wear`, `/wear/` and `/wear/shirts`, but not `/wearable` |
-| ImplementationSpecific | Matching depends on the IngressClass (controller-dependent)                                                                      |
-
-> [!IMPORTANT]
->
-> `pathType` is required: without it the Ingress is rejected (`pathType: Required value: pathType must be specified`); with `Exact` and `Prefix` the path must start with `/`.  
-> If several paths match a request, the longest one wins; with paths of the same length, `Exact` wins over `Prefix`.
->
-> The path is forwarded to the backend unchanged: a request for `/wear/shirts` reaches `wear-service` as `/wear/shirts`, so the application must serve the `/wear` prefix (or the path must be rewritten, see the Additional options section).
-
-```bash
-kubectl create -f ingress-wear-watch.yaml
-# or, imperatively
-kubectl create ingress ingress-wear-watch --class=nginx --rule="/wear*=wear-service:80" --rule="/watch*=watch-service:80"
-```
-
-We now see two backend URLs under the `Rules` section.
-
-```console
-$ kubectl describe ingress ingress-wear-watch
-Name:             ingress-wear-watch
-Labels:           <none>
-Namespace:        default
-Address:
-Ingress Class:    nginx
-Default backend:  <default>
-Rules:
-  Host        Path  Backends
-  ----        ----  --------
-  *
-              /wear    wear-service:80 (<error: services "wear-service" not found>)
-              /watch   watch-service:80 (<error: services "watch-service" not found>)
-Annotations:  <none>
-Events:       <none>
-```
-
-Since the Services don't exist yet, the backends show `<error: services "..." not found>`; once they exist, `describe` shows the endpoints (Pod IP and port) of each backend:
-
-```console
-Rules:
-  Host        Path  Backends
-  ----        ----  --------
-  *
-              /wear    wear-service:80 (10.244.0.209:80)
-              /watch   watch-service:80 (10.244.0.210:80)
-```
-
-You can also notice that the `Default backend` field shows `<default>`, indicating that none has been explicitly configured.  
-We can specify the `defaultBackend`, which defines the backend that receives traffic that does not match any of the rules.  
-If omitted, the handling of unmatched requests is up to the Ingress Controller: typically they receive a 404 response generated by the controller itself.  
-Controllers differ here: for example ingress-nginx also uses the `defaultBackend` of an Ingress for the unmatched paths of the hosts defined in it, while Traefik applies `spec.defaultBackend` only to Ingresses without rules.
-
-The third configuration option uses domain names or host names.  
-In this case we create 2 rules (one for each domain) and we add the field `host` to each rule.  
-Since each host serves a whole application, the path is `/`, which with `pathType: Prefix` matches every path.
-
-> [!CAUTION]
->
-> URL-based routing usually uses a single rule containing multiple paths.  
-> Host-based routing instead uses one rule for each host.  
-> A rule without `host` applies to all hosts (`*` in `kubectl get` and `kubectl describe`).
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: ingress-wear-watch
-spec:
-  ingressClassName: nginx
-  rules:
-  - host: wear.my-online-store.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: wear-service
-            port:
-              number: 80
-  - host: watch.my-online-store.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: watch-service
-            port:
-              number: 80
-```
-
-```bash
-kubectl create ingress ingress-wear-watch --class=nginx \
-  --rule="wear.my-online-store.com/*=wear-service:80" \
-  --rule="watch.my-online-store.com/*=watch-service:80"
-```
-
-If the path were `/wear`, only the requests for `/wear` and `/wear/...` of `wear.my-online-store.com` would be routed, while `http://wear.my-online-store.com/` would receive a 404.
-
-> [!TIP]
->
-> A host can also be a wildcard: `*.my-online-store.com` matches `wear.my-online-store.com`, but neither `my-online-store.com` nor `a.wear.my-online-store.com` (the wildcard covers a single DNS label).  
-> An IP address is not allowed as host (`must be a DNS name, not an IP address`).
-
-You can also add TLS to an Ingress:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: tls-example-ingress
-spec:
-  ingressClassName: nginx
-  tls:
-  - hosts:
-      - https-example.foo.com
-    secretName: testsecret-tls
-  rules:
-  - host: https-example.foo.com
-    http:
-      paths:
-      - path: /
-        pathType: Prefix
-        backend:
-          service:
-            name: service1
-            port:
-              number: 80
-```
-
-Keep in mind that:
-
-- the `hosts` in the `tls` section must match the `host` of the rules (TLS does not work on a rule without host);
-- TLS is terminated by the Ingress Controller, on port 443 only: the traffic from the controller to the Pods is plain HTTP;
-- the Secret must be in the same namespace as the Ingress.
-
-The certificate is retrieved from a Secret of type `kubernetes.io/tls` that must contain the keys `tls.crt` and `tls.key`:
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: testsecret-tls
-  namespace: default
-data:
-  tls.crt: base64 encoded cert
-  tls.key: base64 encoded key
-type: kubernetes.io/tls
-```
-
-Instead of writing it by hand, it's quicker to create it from the certificate and key files (`kubectl` also checks that the key matches the certificate):
-
-```bash
-kubectl create secret tls testsecret-tls --cert=tls.crt --key=tls.key
-```
-
-```console
-$ kubectl get ingress tls-example-ingress
-NAME                  CLASS   HOSTS                   ADDRESS   PORTS     AGE
-tls-example-ingress   nginx   https-example.foo.com             80, 443   20s
-```
-
----
-
-### IngressClass
-
-In modern Kubernetes clusters, multiple Ingress Controllers may coexist (for example NGINX, Traefik, HAProxy).  
-Each controller watches only the Ingress resources that belong to its own class.
-
-An `IngressClass` is a cluster-scoped resource that identifies which Ingress Controller should implement a given Ingress resource.  
-An `Ingress` references it through the field:
-
-```yaml
-spec:
-  ingressClassName: nginx
-```
-
-for example:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: IngressClass
-metadata:
-  name: nginx
-spec:
-  controller: k8s.io/ingress-nginx
-```
-
-The `controller` field identifies the controller implementation: `k8s.io/ingress-nginx` is the default value used by the community ingress-nginx controller.
-
-```console
-$ kubectl get ingressclass
-NAME    CONTROLLER             PARAMETERS   AGE
-nginx   k8s.io/ingress-nginx   <none>       20s
-```
-
-The corresponding Ingress then becomes:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: app-ingress
-spec:
-  ingressClassName: nginx
-  rules:
-  ...
-```
-
-```text
-           Ingress
-  ingressClassName: nginx
-             │
-             ▼
-     +----------------+
-     | IngressClass   |
-     |     nginx      |
-     +----------------+
-             │
-             ▼
-+---------------------------+
-| NGINX Ingress Controller  |
-+---------------------------+
-```
-
-> [!NOTE]
->
-> Before Kubernetes v1.18 it was common to specify the controller through the annotation
->
-> ```yaml
-> kubernetes.io/ingress.class: nginx
-> ```
->
-> This annotation is now deprecated in favour of the `ingressClassName` field.  
-> The API server still accepts it, but returns a warning:
->
-> ```console
-> Warning: annotation "kubernetes.io/ingress.class" is deprecated, please use 'spec.ingressClassName' instead
-> ```
-
-If an `Ingress` does not specify an `ingressClassName`:
-
-- if an IngressClass is marked as the default class, the `DefaultIngressClass` admission controller writes its name in the `spec.ingressClassName` of the new Ingress (the existing Ingresses are not updated);
-- otherwise the Ingress remains without a class, and whether a controller handles it depends on how the controller is configured (ingress-nginx, for example, ignores it unless it is started with `--watch-ingress-without-class`).
-
-An IngressClass is marked as default with the annotation `ingressclass.kubernetes.io/is-default-class: "true"`:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: IngressClass
-metadata:
-  name: nginx
-  annotations:
-    ingressclass.kubernetes.io/is-default-class: "true"
-spec:
-  controller: k8s.io/ingress-nginx
-```
-
-```bash
-# or, on an existing IngressClass
-kubectl annotate ingressclass nginx ingressclass.kubernetes.io/is-default-class=true
-```
-
-> [!CAUTION]
->
-> Mark only one IngressClass as default.  
-> According to the documentation, with more than one default class the new Ingresses without `ingressClassName` are rejected; current versions (verified on v1.34) instead assign the most recently created default class.
-
----
-
-### Additional options
-
-Different Ingress Controllers have different options that can be used to customize how they work.
-
-For example, the [NGINX Ingress Controller has many options](https://kubernetes.github.io/ingress-nginx/examples/), which can be set as command-line arguments of the controller, as global settings in its ConfigMap or for a single Ingress through annotations.
-
-One useful argument to pass to the NGINX Ingress Controller allows the controller to route unmatched requests to a default `Service` (instead of its built-in 404 response), even if no default backend is defined in the `Ingress` resources.
-
-```yaml
-        args:
-        - --default-backend-service=<namespace>/<service>
-```
-
-Some common examples of annotations for the NGINX Ingress Controller are:
-
-| Annotation                                    | Purpose                                                                                               |
-| --------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `nginx.ingress.kubernetes.io/rewrite-target`  | Rewrites the request path before forwarding it to the backend Service                                 |
-| `nginx.ingress.kubernetes.io/use-regex`       | Treats the paths of the Ingress as regular expressions                                                |
-| `nginx.ingress.kubernetes.io/ssl-redirect`    | Redirects HTTP requests to HTTPS (enabled by default when the Ingress has TLS; `"false"` disables it) |
-| `nginx.ingress.kubernetes.io/proxy-body-size` | Sets the maximum accepted request body size                                                           |
-
-These annotations are specific to the NGINX Ingress Controller. Other Ingress Controllers may use different annotations or configuration mechanisms.
-
-`rewrite-target` is often needed because, as seen before, the path is forwarded to the backend unchanged: an application that expects requests on `/` would receive `/wear` and probably answer with a 404.  
-With the regular expression capture groups (example from the ingress-nginx documentation), the part of the path after `/wear` is passed to the backend as `$2`:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: ingress-wear-rewrite
-  annotations:
-    nginx.ingress.kubernetes.io/use-regex: "true"
-    nginx.ingress.kubernetes.io/rewrite-target: /$2
-spec:
-  ingressClassName: nginx
-  rules:
-  - http:
-      paths:
-      - path: /wear(/|$)(.*)
-        pathType: ImplementationSpecific
-        backend:
-          service:
-            name: wear-service
-            port:
-              number: 80
-```
-
-| Request path   | Path received by `wear-service` |
-| -------------- | ------------------------------- |
-| `/wear`        | `/`                             |
-| `/wear/`       | `/`                             |
-| `/wear/shirts` | `/shirts`                       |
-
-The simpler `nginx.ingress.kubernetes.io/rewrite-target: /` (found in many older examples) replaces the whole path with `/`: `/wear/shirts` would also reach the backend as `/`.
-
-Useful commands:
-
-- `kubectl create ingress <ingress-name> --class=<class> --rule="host/path=service:port"`: template for creating an Ingress imperatively. A path ending with `*` gets `pathType: Prefix`, otherwise `pathType: Exact`; the host can be omitted (`--rule="/path*=service:port"`); `,tls=<secret>` at the end of a rule enables TLS for its host (`,tls` alone uses the controller's default certificate); `--default-backend=service:port` and `--annotation key=value` set the default backend and the annotations;
-- `kubectl create ingress ingress-test --class=nginx --rule="wear.my-online-store.com/wear*=wear-service:80"`: creates an Ingress that routes requests for `wear.my-online-store.com` whose path is `/wear` or starts with `/wear/` to the `wear-service` Service on port 80;
-- `kubectl get ingress` (short name `ing`) and `kubectl describe ingress <ingress-name>`: list the Ingresses and show the details of one of them;
-- `kubectl get ingressclass`: lists the IngressClasses of the cluster;
-- `kubectl create secret tls <secret-name> --cert=<cert file> --key=<key file>`: creates the TLS Secret for an Ingress;
-- `curl -H "Host: wear.my-online-store.com" http://<node IP>:<node port>/`: tests a host-based rule without DNS, sending the request to the NodePort of the Ingress Controller with the right `Host` header.
-
----
-
-## State Persistence: Storage, Volumes and StatefulSets
-
-### Storage in Docker
+### 7.1 Storage in Docker
 
 #### How Docker stores data
 
@@ -5189,8 +4423,6 @@ By default, Docker stores its local data under `/var/lib/docker` with the follow
 > Installations upgraded from older versions keep using `overlay2` until the containerd image store is enabled.  
 > `docker info` shows which one is in use: with the containerd image store it reports `Storage Driver: overlayfs` and `driver-type: io.containerd.snapshotter.v1`.
 
----
-
 #### Docker layered filesystem
 
 Docker images use a layered filesystem: the Dockerfile instructions that modify the filesystem (like `RUN`, `COPY` and `ADD`) create a new immutable image layer containing only the changes introduced by that instruction, while instructions like `LABEL` or `CMD` only modify the image metadata.  
@@ -5211,16 +4443,12 @@ The writable container layer exists only for the lifetime of the container: it s
       +-------------------------------+
 ```
 
----
-
 #### Why we need volumes in Docker
 
 The writable layer is ephemeral. If the container is removed, all data stored in that layer disappears as well.  
 This is not suitable for persistent application data such as databases or uploaded files.  
 To persist data independently of the container lifecycle, Docker provides volumes.  
 Volumes are also faster for write-intensive workloads, because they write directly to the host filesystem instead of going through the storage driver.
-
----
 
 #### Named volume vs bind mount
 
@@ -5258,8 +4486,6 @@ In `--mount`, `src` is an alias of `source`, while `dst` and `destination` are a
 >
 > The `bind-create-src` option makes it create the directory.
 
----
-
 #### Storage Drivers vs Volume Drivers
 
 At this point, it is important to distinguish between two different concepts:
@@ -5277,7 +4503,7 @@ The default volume driver plugin is `local` (which can also mount NFS or CIFS sh
 
 ---
 
-### Volumes in Kubernetes
+### 7.2 Volumes
 
 The Pods created in Kubernetes are transient in nature.  
 To persist data processed by the Pod, we attach a volume to them.  
@@ -5372,7 +4598,7 @@ The in-tree volume types of the cloud providers, found in older material, have b
 
 ---
 
-### Persistent Volumes
+### 7.3 PersistentVolumes
 
 In the previous examples we defined volumes inside Pod manifests.  
 This is not ideal in scenarios when we have to deploy multiple Pods and have many deployments to manage.  
@@ -5444,7 +4670,7 @@ Ceph / NetApp / CSI ...
 
 ---
 
-### Persistent Volume Claims
+### 7.4 PersistentVolumeClaims
 
 A `PersistentVolumeClaim` is a request for storage made by a user.  
 Pods use PVCs to access `PersistentVolumes`.  
@@ -5561,7 +4787,7 @@ The same is true for ReplicaSets or Deployments. Add this to the Pod template se
 
 ---
 
-### Storage Classes
+### 7.5 StorageClasses
 
 Before StorageClasses were introduced, persistent storage was usually statically provisioned.  
 Every time an application required storage, a cluster administrator had to:
@@ -5659,7 +4885,7 @@ There is no `kubectl create` command for PersistentVolumes, PersistentVolumeClai
 
 ---
 
-### StatefulSets
+### 7.6 StatefulSets
 
 A StatefulSet runs a group of Pods, and maintains a sticky identity for each of those Pods. This is useful for managing applications that need persistent storage or a stable, unique network identity.
 
@@ -5751,8 +4977,6 @@ Deleting the StatefulSet, instead, gives no ordering guarantee: its Pods are ter
 Rolling updates (the default `updateStrategy`, `RollingUpdate`) also proceed in reverse order, one Pod at a time (`mysql-2`, then `mysql-1`, then `mysql-0`), waiting for each updated Pod to be running and ready; with `rollingUpdate.partition` only the Pods with an ordinal greater than or equal to the partition are updated, while with the `OnDelete` strategy the Pods are updated only when you delete them.  
 In any case, this ordered launch and scaling is the default behavior of StatefulSets, which we can override to not follow an ordered launch but still have the other benefits of a StatefulSet (like a stable and unique network ID). For that we need to set `spec.podManagementPolicy` to `Parallel` (the default is `OrderedReady`).
 
----
-
 #### Headless Service in StatefulSets
 
 StatefulSets typically use a Headless `Service` to provide stable network identities and DNS records for individual Pods.  
@@ -5825,8 +5049,6 @@ With StatefulSets, this configuration is performed automatically:
 
 In recent versions `serviceName` is optional, but without it the Pods get no per-Pod DNS name; in any case, the Headless Service is not created by the StatefulSet: you have to create it yourself.
 
----
-
 #### Storage in StatefulSets
 
 The `volumeClaimTemplates` field provides stable storage using PersistentVolumes provisioned automatically (for example via a `StorageClass` provisioner) or pre-provisioned by an administrator.  
@@ -5885,8 +5107,6 @@ Each Pod keeps its own PVC, and Kubernetes reattaches the corresponding volume w
 >     whenScaled: Delete
 > ```
 
----
-
 #### Deployment vs StatefulSet
 
 Unlike in `Deployments`, Pods belonging to a `StatefulSet` are not interchangeable. Each Pod keeps its own identity, storage and network name across restarts and rescheduling.
@@ -5915,9 +5135,9 @@ Useful commands:
 
 ---
 
-## Security
+## Part 8 – Security
 
-### Kubernetes Security Primitives
+### 8.1 Security primitives
 
 Since Kubernetes is a production-ready platform for hosting applications, security is one of the primary concerns.
 
@@ -5940,7 +5160,7 @@ For communication within the cluster, we have already seen that, by default, all
 
 ---
 
-### Authentication
+### 8.2 Authentication
 
 Our concern is to manage authentication for users (cluster administrators and developers) and Service Accounts.
 
@@ -6003,459 +5223,7 @@ With the token of `mario.rossi` from the file above, it shows `Username mario.ro
 
 ---
 
-### KubeConfig
-
-When communicating with a Kubernetes cluster, authentication and connection parameters may need to be provided to both `kubectl` and `curl`.  
-For example:
-
-```bash
-curl https://my-kube-playground:6443/api/v1/pods \
-  --key admin.key \
-  --cert admin.crt \
-  --cacert ca.crt
-```
-
-```bash
-kubectl get pods \
-  --server https://my-kube-playground:6443 \
-  --client-key admin.key \
-  --client-certificate admin.crt \
-  --certificate-authority ca.crt
-```
-
-In order to avoid typing all those each time, we can move this information to a configuration file called `kubeconfig` and specify only this one with the `--kubeconfig` option in the command.
-
-```bash
-kubectl get pods \
-  --kubeconfig config
-```
-
-By default, the `kubectl` tool looks for the file `~/.kube/config`.  
-So, if the file is placed there, we don't have to specify the path to that file each time.  
-This default can be overridden by setting the `KUBECONFIG` environment variable, which specifies the kubeconfig file(s) to use (with more files, separated by `:` on Linux, `kubectl` merges them).
-
-```bash
-kubectl get pods
-```
-
-That's the reason we didn't have to specify any options for our `kubectl` commands so far.
-
-A kubeconfig file has a specific structure and mainly contains three collections:
-
-- **Clusters**: the Kubernetes clusters that we need access to (for example, different environments, organizations or cloud providers);
-- **Users**: the identities or credentials used to authenticate to those clusters;
-- **Contexts**: define which user accesses which cluster and, optionally, which namespace is used by default.
-
-Using a kubeconfig compared to using the parameters in the commands performed above:
-
-- the server specification (`--server` or URL on curl) and CA certificate (`--certificate-authority` or `--cacert` on curl) go in the cluster section;
-- the user's keys (`--client-key` or `--key` on curl) and certificates (`--client-certificate` or `--cert` on curl) go into the user section;
-- combining them together, as you would when running a command, corresponds to the context.
-
-```text
-Cluster
-  └── server + CA
-
-User
-  └── client certificate + client key
-
-Context
-  └── Cluster + User + Namespace
-```
-
-Here is an example of a real kubeconfig file (the base64 values are shortened):
-
-```yaml
-apiVersion: v1
-kind: Config
-
-clusters:
-- name: development
-  cluster:
-    server: https://development.example.com:6443
-    certificate-authority: /etc/kubernetes/pki/development/ca.crt
-- name: my-kube-playground
-  cluster:
-    server: https://my-kube-playground.example.com:6443
-    certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUIwekNDQVhTZ0F3SUJBZ0lSQU5DNE5qczJiWG8w
-- name: production
-  cluster:
-    server: https://production.example.com:6443
-    certificate-authority: /etc/kubernetes/pki/production/ca.crt
-- name: google
-  cluster:
-    server: https://google.example.com:6443
-    certificate-authority-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURCVENDQWUyZ0F3SUJBZ0lJ
-
-users:
-- name: admin
-  user:
-    client-certificate: admin.crt
-    client-key: admin.key
-- name: my-kube-admin
-  user:
-    token: <token>
-- name: dev-user
-  user:
-    token: <token>
-- name: prod-user
-  user:
-    token: <token>
-
-contexts:
-- name: admin@production
-  context:
-    cluster: production
-    user: admin
-- name: my-kube-admin@my-kube-playground
-  context:
-    cluster: my-kube-playground
-    user: my-kube-admin
-- name: dev@google
-  context:
-    cluster: google
-    user: dev-user
-    namespace: invoicing
-
-current-context: admin@production
-```
-
-> [!NOTE]
->
-> The CA of the destination server can be specified:
->
-> - as a path to a certificate file, with the `certificate-authority` field;
-> - directly in the kubeconfig as a base64-encoded value, with the `certificate-authority-data` field.
->
-> The same applies to the client certificate and key of a user (`client-certificate`/`client-certificate-data` and `client-key`/`client-key-data`).  
-> The `-data` fields must contain valid base64: otherwise every `kubectl` command fails with `error loading config file ... illegal base64 data`.
-
-![kubeconfig: clusters, context and users](./images/01-kubeconfig-clusters-context-users.png "kubeconfig contents")
-
-```mermaid
-flowchart LR
-
-subgraph C["Clusters"]
-    C1["Development"]
-    C2["MyKubePlayground"]
-    C3["Production"]
-    C4["Google"]
-end
-
-subgraph CT["Contexts"]
-    CT1["Admin@Production"]
-    CT2["MyKubeAdmin@MyKubePlayground"]
-    CT3["Dev@Google"]
-end
-
-subgraph U["Users"]
-    U1["Admin"]
-    U2["MyKubeAdmin"]
-    U3["Dev User"]
-    U4["Prod User"]
-end
-
-CT1 -->|cluster| C3
-CT1 -->|user| U1
-
-CT2 -->|cluster| C2
-CT2 -->|user| U2
-
-CT3 -->|cluster| C4
-CT3 -->|user| U3
-
-K["current-context"] --> CT1
-```
-
-```text
-Clusters                  Contexts                           Users
-
-Development
-
-MyKubePlayground ◄──────── MyKubeAdmin@MyKubePlayground ───► MyKubeAdmin
-
-Production ◄────────────── Admin@Production ───────────────► Admin
-
-Google ◄────────────────── Dev@Google ─────────────────────► Dev User
-
-                                                             Prod User
-```
-
-Note that a cluster or a user can also be defined without being used by any context (like `development` and `prod-user`).
-
-As you can notice, there is also a `current-context` field inside the kubeconfig.  
-It tells `kubectl` which context to use by default when no other context is explicitly specified.
-
-The `current-context` field is optional, but without it `kubectl` doesn't know which cluster to contact: `kubectl config current-context` returns `error: current-context is not set` and the other commands fall back to `localhost:8080`, unless a context is passed with `--context <context-name>`.
-
-Useful commands:
-
-- `kubectl config view`: view the configuration of the currently used kubeconfig file(s), merged, with the certificate data and the tokens hidden (`DATA+OMITTED`, `REDACTED`); `--raw` shows them and `--minify` shows only the current context;
-- `kubectl config view --kubeconfig=mycustom-config`: view the configuration of a specific kubeconfig file;
-- `kubectl config get-clusters`: list the clusters available;
-- `kubectl config get-users`: list the users available;
-- `kubectl config get-contexts`: list the contexts available;
-- `kubectl config current-context`: view the current context being used;
-- `kubectl config use-context <context-name>`: change the current context of the current kubeconfig file (it updates the `current-context` field of the file);
-- `kubectl config set-context --current --namespace=<namespace>`: change the default namespace of the current context.
-
-```console
-$ kubectl config get-contexts
-CURRENT   NAME                               CLUSTER              AUTHINFO        NAMESPACE
-*         admin@production                   production           admin
-          dev@google                         google               dev-user        invoicing
-          my-kube-admin@my-kube-playground   my-kube-playground   my-kube-admin
-
-$ kubectl config current-context
-admin@production
-
-$ kubectl config use-context dev@google
-Switched to context "dev@google".
-
-$ kubectl config current-context
-dev@google
-```
-
----
-
-### API Groups
-
-Whatever operations we have performed so far with the cluster, we have been interacting with the Kubernetes API Server, either through the `kubectl` utility or directly through its REST API. For example:
-
-- for checking the version we can use `curl https://kube-master:6443/version`;
-- for many operations, we use the path `/api`, for example `curl https://kube-master:6443/api/v1/pods`;
-- for many other operations, we need to use the path `/apis`, for example `curl https://kube-master:6443/apis/apps/v1/deployments`.
-
-The Kubernetes API is organized into API groups, which provide a way to logically group related resources and make the API easier to extend.  
-API groups are accessible via API paths in the following way:
-
-- `/api`: the API path for the core API group `/api/v1`, which contains resources such as `Pods`, `Services`, `Nodes`, `Namespaces`, `ConfigMaps`, `Secrets`, `PersistentVolumes` and `PersistentVolumeClaims`;
-- `/apis`: the API path that contains named API groups, which organize related resources. It has groups like:
-  - `/apps/v1`: `Deployments`, `ReplicaSets`, `StatefulSets`;
-  - `/batch/v1`: `Jobs`, `CronJobs`;
-  - `/networking.k8s.io/v1`: `NetworkPolicies`, `Ingress`;
-  - `/storage.k8s.io/v1`: `StorageClasses`;
-  - `/authentication.k8s.io/v1`: authentication-related APIs;
-  - `/authorization.k8s.io/v1`: authorization checks like `SubjectAccessReviews` (used by `kubectl auth can-i`);
-  - `/rbac.authorization.k8s.io/v1`: `Roles`, `RoleBindings`, `ClusterRoles`, `ClusterRoleBindings`;
-  - `/certificates.k8s.io/v1`: `CertificateSigningRequests`;
-- Other API server endpoints (that are neither API groups nor part of one), representing `nonResourceURLs` like:
-  - `/version`: to view the version of the cluster;
-  - `/livez` and `/readyz`: to monitor the health of the API server (`/healthz` is deprecated since v1.16);
-  - `/metrics`: to retrieve metrics on the cluster;
-  - `/logs`: to provide access to log files exposed by the API server (deprecated, and disabled by default since v1.31).
-
-> [!CAUTION]
->
-> Not every endpoint exposed by the API server represents a Kubernetes API group.  
-> For example, `/version`, `/metrics` and `/livez` are non-resource endpoints.
-
-The resources are exposed through `/api` and `/apis` API paths.
-
-| Component                          | URI                                                         |
-| ---------------------------------- | ----------------------------------------------------------- |
-| Core API group                     | `/api/<version>/<resource>`                                 |
-| Named API groups                   | `/apis/<group>/<version>/<resource>`                        |
-| Namespaced resources, core group   | `/api/<version>/namespaces/<namespace>/<resource>`          |
-| Namespaced resources, named groups | `/apis/<group>/<version>/namespaces/<namespace>/<resource>` |
-| Other endpoints                    | `/<endpoint>`                                               |
-
-For example, `/api/v1/pods` lists the Pods of all the namespaces, `/api/v1/namespaces/default/pods/nginx` is the Pod `nginx` of the `default` namespace and `/apis/apps/v1/namespaces/default/deployments` lists the Deployments of the `default` namespace.  
-In order to perform operations (like Ccreate, Patch, Replace, Delete) on a namespaced resource, the namespaced URI should always be provided.
-
-> [!NOTE]
->
-> Keep in mind that **resource** and **kind** are not the same thing. For example:
->
-> ```text
-> Resource: deployments
-> Kind:     Deployment
-> ```
->
-> the command `kubectl api-resources` highlights this difference
->
-> ```console
-> $ kubectl api-resources
-> NAME           SHORTNAMES   APIVERSION              NAMESPACED   KIND
-> pods           po           v1                      true         Pod
-> services       svc          v1                      true         Service
-> deployments    deploy       apps/v1                 true         Deployment
-> statefulsets   sts          apps/v1                 true         StatefulSet
-> jobs                        batch/v1                true         Job
-> cronjobs       cj           batch/v1                true         CronJob
-> ingresses      ing          networking.k8s.io/v1    true         Ingress
-> nodes          no           v1                      false        Node
-> ```
-
-| Kind                  | Resource               | API group         | API version | API path                                     |
-| --------------------- | ---------------------- | ----------------- | ----------- | -------------------------------------------- |
-| Pod                   | pods                   | core              | v1          | `/api/v1/pods`                               |
-| Service               | services               | core              | v1          | `/api/v1/services`                           |
-| Deployment            | deployments            | apps              | v1          | `/apis/apps/v1/deployments`                  |
-| StatefulSet           | statefulsets           | apps              | v1          | `/apis/apps/v1/statefulsets`                 |
-| NetworkPolicy         | networkpolicies        | networking.k8s.io | v1          | `/apis/networking.k8s.io/v1/networkpolicies` |
-| PersistentVolumeClaim | persistentvolumeclaims | core              | v1          | `/api/v1/persistentvolumeclaims`             |
-| StorageClass          | storageclasses         | storage.k8s.io    | v1          | `/apis/storage.k8s.io/v1/storageclasses`     |
-
-```text
-Kubernetes API Server
-│
-├── API discovery / resource APIs
-│   ├── /api/v1
-│   │        ├── pods
-│   │        ├── services
-│   │        ├── namespaces
-│   │        ├── configmaps
-│   │        ├── secrets
-│   │        ├── nodes
-│   │        └── ...
-│   │
-│   └── /apis
-│       ├── /apps/v1
-│       ├── /batch/v1
-│       ├── /networking.k8s.io/v1
-│       ├── /storage.k8s.io/v1
-│       ├── /authentication.k8s.io/v1
-│       ├── /certificates.k8s.io/v1
-│       └── ...
-│
-└── Other API server endpoints (nonResourceURLs)
-    ├── /version
-    ├── /livez
-    ├── /readyz
-    ├── /metrics
-    └── ...
-```
-
-You can discover the available API groups through the API Server itself, with the commands:
-
-- `curl https://localhost:6443 -k --key admin.key --cert admin.crt`;
-- `curl https://localhost:6443/api -k --key admin.key --cert admin.crt`;
-- `curl https://localhost:6443/apis -k --key admin.key --cert admin.crt`;
-
-and if you want to check a specific API, you can perform `curl https://localhost:6443/apis/apps/v1 -k --key admin.key --cert admin.crt`.
-
-> [!IMPORTANT]
->
-> Without credentials, the request is anonymous (user `system:anonymous`): in a cluster with RBAC only `/version`, `/healthz`, `/livez` and `/readyz` are allowed, while `/api`, `/apis` and the resources return `403 Forbidden`.
-
-In order to avoid specifying authentication parameters, you can start a local proxy with the command
-
-```bash
-kubectl proxy
-```
-
-and then perform commands like:
-
-- `curl http://localhost:8001`;
-- `curl http://localhost:8001/api`;
-- `curl http://localhost:8001/apis`.
-
-and you can finally get specific information on a single API with a command like `curl http://localhost:8001/apis/apps/v1`.
-
-> [!TIP]
->
-> `kubectl proxy` starts a local proxy that forwards requests to the Kubernetes API server.  
-> By default, it listens on `127.0.0.1:8001` and uses the current kubeconfig context to determine how to connect to the API server.  
-> Using this proxy, we don't have to specify credentials and certificates in each curl command.
->
-> Without a proxy, `kubectl get --raw <path>` (for example `kubectl get --raw /apis/apps/v1`) sends a request to any API path with the credentials of the kubeconfig.
-
-The API group and version are also reflected in the `apiVersion` field of Kubernetes objects:
-
-- Core API group, uses `apiVersion: v1`
-
-  ```yaml
-  apiVersion: v1
-  kind: Pod
-  ```
-
-- Named API group, uses `apiVersion: <group>/<version>`
-
-  ```yaml
-  apiVersion: apps/v1
-  kind: Deployment
-  ```
-
-> [!CAUTION]
->
-> The API group and API version are separate concepts.  
-> For example, `apps/v1` refers to the `apps` API group and its `v1` version.  
-> For resources in the core API group, the group name is omitted and only the version is specified, such as `v1`.
-
-Each resource supports a set of operations, commonly referred to as Kubernetes verbs, such as `get`, `list`, `create`, `update`, `patch`, `delete`, `deletecollection` and `watch`.
-
-> [!NOTE]
->
-> Kubernetes verbs should not be confused with HTTP methods.  
-> For example:
->
-> - `kubectl get pods` uses the Kubernetes `list` verb (it reads a collection), implemented through an HTTP `GET` request, while `kubectl get pod nginx` uses the `get` verb;
-> - `kubectl create deployment ...` uses the Kubernetes `create` verb and is implemented using an HTTP `POST` request;
-> - `watch` is implemented using an HTTP `GET` request with the `?watch=true` parameter.
->
-> | HTTP method   | Kubernetes verb                                                            |
-> | ------------- | -------------------------------------------------------------------------- |
-> | `POST`        | `create`                                                                   |
-> | `GET`, `HEAD` | `get` (single resource), `list` (collection), `watch` (with `?watch=true`) |
-> | `PUT`         | `update`                                                                   |
-> | `PATCH`       | `patch`                                                                    |
-> | `DELETE`      | `delete` (single resource), `deletecollection` (collection)                |
->
-> This matters for RBAC: a user allowed only to `get` Pods can run `kubectl get pod nginx`, but `kubectl get pods` fails with `cannot list resource "pods"`.
-
-To summarize:
-
-- the Kubernetes API Server exposes Kubernetes resources through API groups;
-- at the top level we have a core API group (exposed through `/api`) and named API groups (exposed through `/apis`);
-- under the named API groups we have one API group for each API section;
-- each API group can have one or more API versions;
-- each API version exposes one or more resources;
-- resources support operations (Kubernetes verbs) such as `get`, `list`, `create`, `update`, `patch`, `delete` and `watch`.
-
-```text
-                Kubernetes API Server
-                        │
-        ┌───────────────┴───────────────┐
-        │                               │
-    Core API group                Named API groups
-      /api                           /apis
-        │                               │
-        v1                     ┌────────┼────────────────┐
-        │                      │        │                │
-┌───────┼────────┐           apps     batch     networking.k8s.io
-│       │        │             │        │                │
-pods  services  configmaps    v1       v1               v1
-                               │
-                         deployments
-                               │
-                         Kubernetes verbs
-                   ┌───────────┼───────────┐
-                 get        create       delete
-```
-
-```text
-API group
-    │
-    └── API version
-            │
-            └── Resource
-                    │
-                    └── Operations / verbs
-```
-
-Useful commands:
-
-- `kubectl api-versions`: show the available API groups and versions, in the form `<group>/<version>`;
-- `kubectl api-resources`: show available resources and the corresponding API group (especially useful when you can't find a resource on the documentation pages); `-o wide` also shows the verbs supported by each resource, `--api-group=<group>` and `--namespaced=true|false` filter the list;
-- `kubectl explain <resource name>`: gives details on the Kind and lists the top level fields and their type;
-- `kubectl explain <resource name>.<field name>`: gives details on the Kind and lists the subfields and their type;
-- `kubectl explain <resource name> --recursive`: lists all fields that we would put in the YAML file;
-- `kubectl get --raw <API path>`: sends a GET request to any API path, using the credentials of the kubeconfig.
-
----
-
-### Authorization
+### 8.3 Authorization
 
 Authentication answers **"Who are you?"**  
 Authorization answers **"What are you allowed to do?"**
@@ -6562,7 +5330,7 @@ The Node authorizer then grants the kubelet the permissions required to operate 
 
 > [!NOTE]
 >
-> ABAC permissions are expressed using Kubernetes API concepts introduced in the previous section: API groups, resources and namespaces.  
+> ABAC permissions are expressed using Kubernetes API groups, resources and namespaces.  
 > Unlike RBAC, ABAC has no list of verbs: a policy allows either all the operations or, with `readonly: true`, only the read ones.
 
 With ABAC, we create a policy file containing a set of policies defined in JSON format (one JSON object per line) and pass it to the API server with `--authorization-mode=ABAC` and `--authorization-policy-file=<file>`.  
@@ -6676,7 +5444,7 @@ but Admission and Admission Controllers will be covered in more detail in the Ad
 
 ---
 
-### Role-Based Access Control (RBAC)
+### 8.4 Role-Based Access Control (RBAC)
 
 We manage RBAC with the following objects:
 
@@ -6936,7 +5704,597 @@ Useful commands:
 
 ---
 
-### Admission Controllers
+### 8.5 ServiceAccounts
+
+In Kubernetes there are two types of accounts:
+
+- user account: used by humans (an admin that performs administrative tasks or a developer deploying applications);
+- service account: used by an application to interact with the Kubernetes cluster (a monitoring application like Prometheus or a build tool like Jenkins).
+
+Kubernetes has no `User` object: users are managed outside the cluster (e.g. with client certificates or an external identity provider), while ServiceAccounts are namespaced Kubernetes objects.
+
+A service account is a type of non-human account that provides a distinct identity in a Kubernetes cluster.  
+The concept of Service Account is linked to other security-related concepts in Kubernetes, such as authentication, authorization, RBAC, etc.
+
+> [!IMPORTANT]
+>
+> A `ServiceAccount` **does not grant permissions by itself**.  
+> Permissions are granted by binding the `ServiceAccount` to a `Role` or `ClusterRole` using RBAC.
+>
+> Pods authenticate to the Kubernetes API using a ServiceAccount.  
+> What the Pod is allowed to do depends on the RBAC permissions assigned to that ServiceAccount, not on the ServiceAccount itself.
+
+#### The default ServiceAccount
+
+A service account named `default` already exists by default in every Kubernetes namespace.  
+Whenever a Pod is created without specifying a ServiceAccount, it is assigned the `default` service account of its namespace, and a token for it is automatically mounted into the Pod as a projected volume on the path `/var/run/secrets/kubernetes.io/serviceaccount`.  
+You can see that with the command `kubectl describe pod <pod-name>`.
+
+```text
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-srhgg (ro)
+```
+
+If you list the contents of that directory, you will see three files projected into the Pod
+
+```console
+$ kubectl exec -it nginx -- ls /var/run/secrets/kubernetes.io/serviceaccount
+ca.crt  namespace  token
+```
+
+The token is automatically mounted unless explicitly disabled with the setting `automountServiceAccountToken: false`, either in the `ServiceAccount` or in the Pod `spec` (the Pod setting takes precedence).
+
+> [!NOTE]
+>
+> By default, the `default` ServiceAccount has very limited permissions.  
+> What it can do depends on the RBAC roles bound to it.
+
+#### Using a custom ServiceAccount
+
+If you want to use a different `ServiceAccount`, specify its name in the `serviceAccountName` field.
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dashboard-sa
+  namespace: default
+```
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: my-kubernetes-dashboard
+spec:
+  containers:
+  - name: my-kubernetes-dashboard
+    image: nginx
+  serviceAccountName: dashboard-sa
+```
+
+```bash
+kubectl create -f dashboard-sa.yaml
+kubectl create -f my-kubernetes-dashboard.yaml
+```
+
+When you look at the Pod details now, you see that the new `ServiceAccount` is being used
+
+```console
+$ kubectl describe pod my-kubernetes-dashboard
+    Mounts:
+      /var/run/secrets/kubernetes.io/serviceaccount from kube-api-access-bxmxs (ro)
+
+$ kubectl exec -ti my-kubernetes-dashboard -- ls /var/run/secrets/kubernetes.io/serviceaccount
+ca.crt  namespace  token
+```
+
+> [!IMPORTANT]
+>
+> A Pod can reference a ServiceAccount only at creation time.
+>
+> To change the ServiceAccount, recreate the Pod or update the Deployment so that a new rollout is triggered.
+
+#### ServiceAccount tokens
+
+A ServiceAccount is mainly used to authenticate to the Kubernetes API.  
+A ServiceAccount token is obtained through the TokenRequest API and projected into the Pod as part of a projected volume.
+
+Inside the mounted `ServiceAccount` volume, the `token` file contains the ServiceAccount token, which is a JWT (three Base64URL-encoded parts separated by dots: header, payload and signature).
+
+```console
+$ kubectl exec -it nginx -- cat /var/run/secrets/kubernetes.io/serviceaccount/token
+eyJhbGciOiJSUzI1NiIsImtpZCI6ImRSR3pRcTRSamFxTGdqS0hSZHhmN2w4RmtTMTFtZzdhUDJWSlB1NjNrVTgifQ.eyJhdWQiOlsiaHR0cHM6Ly9rdWJlcm5ldGVzLmRlZmF1bHQuc3ZjLmNsdXN0ZXIubG9jYWwiXSwi...(truncated)
+```
+
+You can use the JWT as a Bearer token when authenticating to the Kubernetes REST API (for example with curl, you can pass it in the `Authorization` header).
+
+If decoded, the JWT has the following structure
+
+```json
+{
+  "aud": [
+    "https://kubernetes.default.svc.cluster.local"
+  ],
+  "exp": 1815145972,
+  "iat": 1783609972,
+  "iss": "https://kubernetes.default.svc.cluster.local",
+  "jti": "bda93a42-b79d-4d58-ab2d-0ffa7f7b4e8b",
+  "kubernetes.io": {
+    "namespace": "default",
+    "node": {
+      "name": "minikube",
+      "uid": "26a29340-27ef-44c6-b543-8baeaec7f4cb"
+    },
+    "pod": {
+      "name": "nginx",
+      "uid": "5c711d3a-81c3-44ae-a1e1-998f53346a9f"
+    },
+    "serviceaccount": {
+      "name": "default",
+      "uid": "17ef408b-78a1-4e54-b064-a3c755826052"
+    },
+    "warnafter": 1783613579
+  },
+  "nbf": 1783609972,
+  "sub": "system:serviceaccount:default:default"
+}
+```
+
+We can notice the `exp` field, which specifies the expiration time of the token.  
+The default token duration is one hour from the creation time (this is also the default duration of the tokens created with `kubectl create token`), but the effective duration depends on the cluster configuration.  
+In fact, in this example `exp - iat` is exactly one year, while `warnafter - iat` is about one hour (3607 seconds): the kubelet requested a token of about one hour for the projected volume, but the API server extended its expiration (flag `--service-account-extend-token-expiration`, enabled by default) for backward compatibility with clients that do not reload the token from the file. After `warnafter` the token still works, but its use is flagged by the API server as stale.  
+In any case, the kubelet automatically rotates the projected token before it expires.
+
+You can also generate a new JWT with `kubectl create token <serviceaccount-name>`.
+
+#### Granting permissions to a ServiceAccount
+
+If you try to check if the `dashboard-sa` ServiceAccount has the right to query the Kubernetes API with the command
+
+```bash
+kubectl auth can-i get pods --as=system:serviceaccount:default:dashboard-sa
+```
+
+you will receive a `no` as a response, because no permissions have been assigned to it.
+
+If, instead, you create a `Role` and assign it with a `RoleBinding`
+
+```yaml
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  namespace: default
+  name: pod-reader
+rules:
+- apiGroups:
+  - ''
+  resources:
+  - pods
+  verbs:
+  - get
+  - watch
+  - list
+```
+
+```yaml
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: read-pods
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: dashboard-sa # Name is case sensitive
+  namespace: default
+roleRef:
+  kind: Role # must be Role or ClusterRole
+  name: pod-reader # must match the name of the Role or ClusterRole you wish to bind to
+  apiGroup: rbac.authorization.k8s.io
+```
+
+```bash
+kubectl apply -f pod-reader-role.yaml
+kubectl apply -f read-pods-role-binding.yaml
+```
+
+If you re-execute the command above, you will see that the response is now `yes`, because the ServiceAccount has been granted the required permissions.
+
+```text
+ Application
+      │
+      ▼
+ServiceAccount
+      │
+      ▼
+  JWT Token
+      │
+      ▼
+Authentication
+      │
+      ▼
+    RBAC
+      │
+      ▼
+Allowed / Denied
+```
+
+#### Manually mount a ServiceAccount token
+
+You manually mount a ServiceAccount token by disabling automatic mounting of API credentials and using a projected volume.
+
+By default, a token is mounted into every Pod, even if the application never talks to the Kubernetes API.  
+If a container is compromised, an attacker can read the token from the filesystem and use it to call the Kubernetes API with all the permissions of the ServiceAccount.  
+Disabling the automatic mount makes API credentials **opt-in**: only the Pods (and the containers) that really need a token get one, and you decide where it is mounted, how long it lasts and who it is meant for.
+
+The automatic mount is controlled by the `automountServiceAccountToken` field, which can be set in the `ServiceAccount` (as the default for all the Pods that use it) and in the Pod `spec` (which takes precedence):
+
+| `ServiceAccount`  | Pod `spec` | Token mounted automatically? |
+| ----------------- | ---------- | ---------------------------- |
+| not set or `true` | not set    | yes (default behavior)       |
+| `false`           | not set    | no                           |
+| any value         | `true`     | yes (the Pod setting wins)   |
+| any value         | `false`    | no (the Pod setting wins)    |
+
+With `automountServiceAccountToken: false` and nothing else, the Pod has no token at all: this is the right choice for applications that never call the Kubernetes API.
+
+> [!NOTE]
+>
+> The automatic mount is itself a projected volume, which the ServiceAccount admission controller adds to the Pod when it is created.  
+> A projected volume combines several sources (such as `serviceAccountToken`, `configMap`, `secret` and `downwardAPI`) into a single directory.  
+> You can see it in the output of `kubectl get pod nginx -o yaml`:
+>
+> ```yaml
+>   volumes:
+>   - name: kube-api-access-srhgg
+>     projected:
+>       defaultMode: 420 # file permissions (0644 in octal)
+>       sources:
+>       - serviceAccountToken:
+>           expirationSeconds: 3607
+>           path: token
+>       - configMap:
+>           items:
+>           - key: ca.crt
+>             path: ca.crt
+>           name: kube-root-ca.crt
+>       - downwardAPI:
+>           items:
+>           - fieldRef:
+>               apiVersion: v1
+>               fieldPath: metadata.namespace
+>             path: namespace
+> ```
+>
+> Each source produces one of the three files seen before:
+>
+> - `token`: the ServiceAccount token. 3607 seconds (one hour and 7 seconds) is the special duration requested for the tokens injected by the admission controller: when the API server receives a request for this duration, it extends the expiration to one year (see above);
+> - `ca.crt`: the certificate of the cluster CA, used to verify the TLS certificate of the API server. It comes from the `kube-root-ca.crt` ConfigMap, which Kubernetes creates in every namespace;
+> - `namespace`: the namespace of the Pod, taken from its metadata through the Downward API.
+
+Here is an example of manually mounting a ServiceAccount token to a Deployment named `web-dashboard`.  
+It uses the `dashboard-sa` ServiceAccount, the `pod-reader` Role and the `read-pods` RoleBinding created in the previous sections.  
+The application of the Deployment (a dashboard) reads the token mounted in the Pod and uses it to list the Pods through the Kubernetes API: here we simulate it with `curl`, which is included in the `nginx` image.
+
+1) **Create the Deployment**  
+   Save the following manifest as `web-dashboard.yaml`.  
+   It does not specify a ServiceAccount, so its Pods use the `default` one, with the token mounted automatically.
+
+   ```yaml
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: web-dashboard
+     namespace: default
+     labels:
+       name: web-dashboard
+   spec:
+     replicas: 1
+     selector:
+       matchLabels:
+         name: web-dashboard
+     template:
+       metadata:
+         labels:
+           name: web-dashboard
+       spec:
+         containers:
+         - name: web-dashboard
+           image: nginx:1.28                  # includes curl, used below to call the Kubernetes API
+           ports:
+           - containerPort: 80
+   ```
+
+   ```bash
+   kubectl create -f web-dashboard.yaml
+   kubectl rollout status deployment web-dashboard
+   ```
+
+   Now do what the application does: read the token mounted in the Pod and use it to ask the API server for the list of the Pods in the `default` namespace.
+
+   ```console
+   $ kubectl exec deploy/web-dashboard -- sh -c 'curl -sk -w "\n" \
+       -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+       https://kubernetes.default.svc/api/v1/namespaces/default/pods'
+   {
+     "kind": "Status",
+     "apiVersion": "v1",
+     "metadata": {},
+     "status": "Failure",
+     "message": "pods is forbidden: User \"system:serviceaccount:default:default\" cannot list resource \"pods\" in API group \"\" in the namespace \"default\"",
+     "reason": "Forbidden",
+     "details": {
+       "kind": "pods"
+     },
+     "code": 403
+   }
+   ```
+
+   The command runs `curl` inside the container:
+
+   - `$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)` reads the token, which is sent in the `Authorization: Bearer <token>` header;
+   - `https://kubernetes.default.svc` is the address of the API server from inside the cluster (the `kubernetes` Service of the `default` namespace);
+   - `-s` hides the progress bar, `-w "\n"` adds a newline after the response and `-k` skips the verification of the API server certificate (at the end of the procedure, `ca.crt` will no longer be mounted).
+
+   The API server accepts the token and identifies the Pod as `system:serviceaccount:default:default` (authentication succeeded), but the `default` ServiceAccount has no permission to list the Pods, so the request is denied with `403 Forbidden`.  
+   An invalid token, instead, would be rejected with `401 Unauthorized`.
+
+2) **Use the ServiceAccount in the Deployment**  
+   A projected token is always issued for the ServiceAccount of the Pod (the `serviceAccountToken` source has no field to choose a different one).  
+   So the Deployment must use `dashboard-sa`, which can list the Pods thanks to the `read-pods` RoleBinding (see the previous section):
+
+   ```bash
+   kubectl set serviceaccount deployment web-dashboard dashboard-sa
+   kubectl rollout status deployment web-dashboard
+   ```
+
+   (short form: `kubectl set sa deploy/web-dashboard dashboard-sa`)  
+   Alternatively, run `kubectl edit deployment web-dashboard` and set `serviceAccountName: dashboard-sa` under `spec.template.spec`.  
+   In both cases the Pod template changes, so the Deployment rolls out new Pods that use the new ServiceAccount.
+
+   Before running the next command, check with `kubectl get pods -l name=web-dashboard` that the old Pod has disappeared (it can stay in `Terminating` for a few seconds after the rollout), otherwise `kubectl exec deploy/web-dashboard` may still run in it.  
+   This time, the same `curl` command returns the list of the Pods:
+
+   ```console
+   $ kubectl exec deploy/web-dashboard -- sh -c 'curl -sk -w "\n" \
+       -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+       https://kubernetes.default.svc/api/v1/namespaces/default/pods'
+   {
+     "kind": "PodList",
+     "apiVersion": "v1",
+     ...
+   ```
+
+3) **Disable the automatic mount on the ServiceAccount**
+
+   ```bash
+   kubectl patch serviceaccount dashboard-sa -p '{"automountServiceAccountToken": false}'
+   ```
+
+   Alternatively, run `kubectl edit serviceaccount dashboard-sa` and add the field at the top level of the manifest, at the same level as `apiVersion` and `kind` (a `ServiceAccount` has no `spec`):
+
+   ```yaml
+   apiVersion: v1
+   automountServiceAccountToken: false
+   kind: ServiceAccount
+   metadata:
+     name: dashboard-sa
+     namespace: default
+   ```
+
+   This change does not affect the Pods that are already running, because the token is mounted (or not) only when a Pod is created:
+
+   ```console
+   $ kubectl exec deploy/web-dashboard -- ls /var/run/secrets/kubernetes.io/serviceaccount
+   ca.crt
+   namespace
+   token
+   ```
+
+   A Pod created from now on with the current Pod template (for example after `kubectl rollout restart deployment web-dashboard`), instead, would not even have the `/var/run/secrets/kubernetes.io/serviceaccount` directory.
+
+4) **Mount the token with a projected volume**
+
+   There is no imperative command to add a volume, so you have to edit the manifest of the Deployment (the `web-dashboard.yaml` file of step 1, or the live object with `kubectl edit deployment web-dashboard`).  
+   In the Pod template (`spec.template.spec`):
+
+   - set `serviceAccountName: dashboard-sa`: the file of step 1 does not contain it, because in step 2 the ServiceAccount was changed only in the live object, with `kubectl set serviceaccount`;
+   - set `automountServiceAccountToken: false` also at Pod level, so that the Pod no longer depends on the configuration of the ServiceAccount;
+   - define a projected volume named `token` with a `serviceAccountToken` source;
+   - mount the volume read-only in the container, at the standard path `/var/run/secrets/kubernetes.io/serviceaccount`, where applications and Kubernetes client libraries look for the token (the file will be `/var/run/secrets/kubernetes.io/serviceaccount/token`).
+
+   ```yaml
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: web-dashboard
+     namespace: default
+     labels:
+       name: web-dashboard
+   spec:
+     replicas: 1
+     selector:
+       matchLabels:
+         name: web-dashboard
+     template:
+       metadata:
+         labels:
+           name: web-dashboard
+       spec:
+         serviceAccountName: dashboard-sa     # the token is issued for this ServiceAccount
+         automountServiceAccountToken: false  # no automatic kube-api-access-xxxxx volume
+         containers:
+         - name: web-dashboard
+           image: nginx:1.28
+           ports:
+           - containerPort: 80
+           volumeMounts:
+           - name: token                      # must match the name of the volume
+             mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+             readOnly: true
+         volumes:
+         - name: token
+           projected:
+             sources:
+             - serviceAccountToken:
+                 path: token                  # name of the file inside mountPath
+   ```
+
+   ```console
+   $ kubectl apply -f web-dashboard.yaml
+   Warning: resource deployments/web-dashboard is missing the kubectl.kubernetes.io/last-applied-configuration annotation which is required by kubectl apply. kubectl apply should only be used on resources created declaratively by either kubectl create --save-config or kubectl apply. The missing annotation will be patched automatically.
+   deployment.apps/web-dashboard configured
+   ```
+
+   Projected volumes are always mounted read-only (like Secret and ConfigMap volumes), but `readOnly: true` makes it explicit.
+
+   > [!TIP]
+   >
+   > When an object was created with `kubectl create` (like the Deployment of step 1), `kubectl apply` prints the warning above about the missing `kubectl.kubernetes.io/last-applied-configuration` annotation.  
+   > It is harmless: `kubectl apply` uses that annotation to remember the configuration applied the last time, and adds it automatically.  
+   > The only side effect is that, in this first `apply`, the fields that are in the live object but not in the file are not removed: if you deleted something from the file, use `kubectl replace -f <file-name>` instead.
+
+5) **Verify**
+
+   ```console
+   $ kubectl rollout status deployment web-dashboard
+   deployment "web-dashboard" successfully rolled out
+
+   $ kubectl exec deploy/web-dashboard -- ls /var/run/secrets/kubernetes.io/serviceaccount
+   token
+   ```
+
+   As in step 2, make sure that the old Pod has disappeared before running `kubectl exec`, because the old Pods still have the automatic mount.  
+
+   > [!TIP]
+   >
+   > `kubectl exec deploy/web-dashboard` runs the command in a Pod of the Deployment, and is a shorter version compared to retrieving the pod with `kubectl exec $(kubectl get pod -l name=web-dashboard -o jsonpath='{.items[0].metadata.name}') -- ...`, where `$(...)` returns the name of the first Pod with the label `name=web-dashboard`.
+
+   This time the directory contains only the `token` file, because the projected volume has only the `serviceAccountToken` source.  
+   The manually mounted token works exactly like the automatic one: the Pod still authenticates as `dashboard-sa` and can list the Pods.
+
+   ```console
+   $ kubectl exec deploy/web-dashboard -- sh -c 'curl -sk -w "\n" \
+       -H "Authorization: Bearer $(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+       https://kubernetes.default.svc/api/v1/namespaces/default/pods'
+   {
+     "kind": "PodList",
+     "apiVersion": "v1",
+     ...
+   ```
+
+   This is enough for our `curl`, which skips the verification of the certificate (`-k`), but many applications (and the Kubernetes client libraries, when they use the in-cluster configuration) also expect the `ca.crt` file in the same directory, to verify the TLS certificate of the API server: for example, `curl --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt ...` would now fail with error 77 (the CA certificate file cannot be read).  
+   In that case, add to the same projected volume the `configMap` source (and, if needed, the `downwardAPI` one) of the `kube-api-access-xxxxx` volume shown above.
+
+   `kubectl describe pod` also shows the `token` volume instead of `kube-api-access-xxxxx`:
+
+   ```text
+       Mounts:
+         /var/run/secrets/kubernetes.io/serviceaccount from token (ro)
+   ```
+
+6) **Rollback**
+
+   To go back to the initial situation (for example to repeat the procedure), delete the Deployment and remove the field from the ServiceAccount: otherwise, the Pods that you create from now on with `dashboard-sa` (like `my-kubernetes-dashboard` of the previous sections) will not receive the token.
+
+   ```bash
+   kubectl delete deployment web-dashboard
+   kubectl patch serviceaccount dashboard-sa -p '{"automountServiceAccountToken": null}'
+   ```
+
+   In a patch, setting a field to `null` removes it.
+
+> [!NOTE]
+>
+> The `serviceAccountToken` source accepts two more optional fields:
+>
+> ```yaml
+>       volumes:
+>       - name: token
+>         projected:
+>           sources:
+>           - serviceAccountToken:
+>               path: token
+>               expirationSeconds: 1800 # requested validity: default 3600, minimum 600
+>               audience: vault         # intended recipient: default is the Kubernetes API server
+> ```
+>
+> - `expirationSeconds`: unlike the token of the automatic volume, a manually projected token is not extended to one year, so it really lasts only the requested time. The kubelet rotates it before it expires (when it is older than 80% of its validity, or older than 24 hours), so the application must re-read the file periodically (recent versions of the official Kubernetes client libraries do it automatically);
+> - `audience`: a token issued for a different audience is **not** accepted by the Kubernetes API server (which answers `401 Unauthorized`): it is meant for another service (for example HashiCorp Vault), which checks that the token was issued for it.
+>
+> In any case, the token is bound to the Pod: it becomes invalid as soon as the Pod is deleted.
+
+To sum up:
+
+|                | Automatic mount (default)                                  | Manual mount                                             |
+| -------------- | ---------------------------------------------------------- | -------------------------------------------------------- |
+| Configuration  | nothing to do                                              | `automountServiceAccountToken: false` + projected volume |
+| Volume         | `kube-api-access-xxxxx`, added by the admission controller | defined by you in the Pod `spec`                         |
+| Containers     | all the containers of the Pod                              | only those with the `volumeMount`                        |
+| Files          | `token`, `ca.crt`, `namespace`                             | only the sources you add                                 |
+| Token validity | 1 hour, extended by default to 1 year                      | `expirationSeconds` (default 1 hour)                     |
+
+#### Evolution of ServiceAccount tokens
+
+Service account tokens have evolved over time.
+
+Prior to Kubernetes v1.24, creating a ServiceAccount automatically created a Secret containing a long-lived token.  
+The Secret name appeared in the `secrets` field of the ServiceAccount (shown as `Tokens` in the output of `kubectl describe serviceaccount`).  
+In that case, you could directly mount the Secret (containing the token) as a volume of a Pod.
+
+In Kubernetes v1.21 and earlier, that default token was not time bound (so it did not have an expiration and was valid as long as the Service Account existed) and was not audience bound.  
+Starting with Kubernetes v1.22, Pods use short-lived, audience-bound, object-bound ServiceAccount tokens obtained through the TokenRequest API and projected into the Pod. This was made as part of the enhancement proposal KEP-1205, which introduced a more secure and scalable mechanism for provisioning ServiceAccount tokens.  
+Tokens generated through this API are:
+
+- time bound
+- audience bound
+- object bound
+
+This makes ServiceAccount tokens significantly more secure.  
+Instead of mounting a `Secret` containing a long-lived token, Kubernetes now obtains a short-lived token through the TokenRequest API and projects it directly into the Pod.
+
+Starting from Kubernetes v1.24, Kubernetes stopped automatically creating long-lived token Secrets when a ServiceAccount is created.  
+This was introduced by KEP-2799: "Reduction of Secret-based Service Account Tokens".  
+If you need a token outside a Pod (for example, for an external application or a CI/CD tool), you can run the command `kubectl create token dashboard-sa`; the token will be printed to the screen (by default it is valid for one hour, which you can change with `--duration`).
+
+| Version | Behavior                                                               |
+| ------- | ---------------------------------------------------------------------- |
+| ≤1.21   | Long-lived ServiceAccount tokens were automatically created in Secrets |
+| 1.22    | Bound ServiceAccount tokens became the default for Pods                |
+| ≥1.24   | Long-lived token Secrets are no longer automatically created           |
+
+If a long-lived token is needed nowadays, similar to the legacy behavior, it can still be created using a `Secret` of type `kubernetes.io/service-account-token`.  
+In this case we need to specify the name of the `ServiceAccount` in the `kubernetes.io/service-account.name` annotation (under `metadata.annotations`).
+
+```yaml
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/service-account-token
+metadata:
+  name: mysecretname
+  annotations:
+    kubernetes.io/service-account.name: dashboard-sa
+```
+
+> [!CAUTION]
+>
+> According to the Kubernetes documentation, a service-account-token Secret object should only be created if
+>
+> - we cannot use the `TokenRequest` API to obtain a token and;
+> - the security exposure of persisting a non-expiring token credential is acceptable.
+
+Some commands:
+
+- `kubectl create serviceaccount dashboard-sa`: creates a ServiceAccount inside the default namespace;
+- `kubectl get serviceaccount`: list the ServiceAccounts inside the default namespace;
+- `kubectl describe serviceaccount dashboard-sa`: gives details of a ServiceAccount inside the default namespace;
+- `kubectl create token dashboard-sa`: generate a short-lived token for a ServiceAccount.
+
+---
+
+### 8.6 Admission controllers
 
 When a request hits the API Server, we know that it goes
 
@@ -7440,7 +6798,473 @@ webhooks:
 
 ---
 
-### API versions
+### 8.7 Security contexts
+
+A security context defines privilege and access control settings for a `Pod` or a container. The most common are:
+
+- `runAsUser`: specifies the Linux User ID (UID) used to run the container processes;
+- `runAsGroup`: specifies the Linux Primary Group ID (GID) used to run the container processes;
+- `runAsNonRoot`: prevents the container from running as the root user (UID 0);
+- `fsGroup`: defines a supplementary GID added to the container processes; the mounted volumes that support it are made owned by this GID, so that the processes can write to them;
+- Linux Capabilities: for example `NET_ADMIN`, `MAC_ADMIN` or `ALL`, which you can add or remove with `capabilities.add` and `capabilities.drop`.
+
+Some of the security context parameters can be set at container level, some at Pod level, while others can be set both at container and Pod level.  
+The following table shows where some of the main security context parameters can be set.
+
+| Setting                    | Pod                | Container          |
+| -------------------------- | ------------------ | ------------------ |
+| `runAsUser`                | :white_check_mark: | :white_check_mark: |
+| `runAsGroup`               | :white_check_mark: | :white_check_mark: |
+| `runAsNonRoot`             | :white_check_mark: | :white_check_mark: |
+| `fsGroup`                  | :white_check_mark: | :x:                |
+| `supplementalGroups`       | :white_check_mark: | :x:                |
+| `seLinuxOptions`           | :white_check_mark: | :white_check_mark: |
+| `seccompProfile`           | :white_check_mark: | :white_check_mark: |
+| `appArmorProfile`          | :white_check_mark: | :white_check_mark: |
+| `capabilities`             | :x:                | :white_check_mark: |
+| `privileged`               | :x:                | :white_check_mark: |
+| `allowPrivilegeEscalation` | :x:                | :white_check_mark: |
+| `readOnlyRootFilesystem`   | :x:                | :white_check_mark: |
+
+> [!NOTE]
+>
+> A Pod-level `securityContext` defines the default security settings for all containers in the `Pod`.  
+> A Container-level `securityContext` applies only to that container and overrides the Pod-level setting whenever the same field can be specified at both levels.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web-pod
+spec:
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 3000
+    runAsNonRoot: true
+  containers:
+  - name: ubuntu
+    image: ubuntu
+    command: ["sleep", "3600"]
+    securityContext:
+      capabilities:
+        add:
+        - NET_ADMIN
+```
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web-pod
+spec:
+  containers:
+  - name: ubuntu
+    image: ubuntu
+    command: ["sleep", "3600"]
+    securityContext:
+      runAsUser: 1000
+      runAsGroup: 3000
+      runAsNonRoot: true
+      capabilities:
+        drop: ["ALL"]
+```
+
+> [!NOTE]
+>
+> Capabilities added with `capabilities.add` are reliably effective only for processes running as root: with the common container runtimes, a process running as a non-root user (like UID 1000 in the first example) usually does not get them, because they are not set as *ambient* capabilities. The first example is therefore mainly a syntax example.  
+> Dropping capabilities (`drop: ["ALL"]`), instead, always works and is a common hardening practice.
+
+If you want to check the user running a process, you can:
+
+- list the processes with the `ps aux` command from the host machine;
+- print the current user ID, group ID, and the groups it belongs to with `kubectl exec <pod-name> -- id`;
+- print the current username with `kubectl exec <pod-name> -- whoami`.
+
+---
+
+## Part 9 – Observability and maintenance
+
+### 9.1 Pod status, phases and conditions
+
+Every Pod has a `status` field (a `PodStatus` object) that contains information about the current state of the Pod, including:
+
+- the Pod phase;
+- the Pod conditions;
+- container statuses;
+- IP addresses;
+- start time;
+- and other runtime information.
+
+You can get details about the Pod Status with the command `kubectl describe pod <pod name>`, or see the whole `status` section with `kubectl get pod <pod name> -o yaml`.
+
+```text
+Pod
+ │
+ └── status (PodStatus)
+      │
+      ├── phase
+      │     ├── Pending
+      │     ├── Running
+      │     ├── Succeeded
+      │     ├── Failed
+      │     └── Unknown
+      │
+      ├── conditions
+      │     ├── PodScheduled
+      │     ├── PodReadyToStartContainers
+      │     ├── Initialized
+      │     ├── ContainersReady
+      │     └── Ready
+      │
+      ├── reason / message          (e.g. Evicted)
+      ├── podIP
+      ├── startTime
+      ├── hostIP
+      ├── initContainerStatuses
+      └── containerStatuses
+            ├── state               (current state of the container)
+            │     ├── waiting       (reason: ContainerCreating, CrashLoopBackOff, ...)
+            │     ├── running
+            │     └── terminated    (reason: Completed, Error, OOMKilled, ... + exitCode)
+            └── lastState           (previous termination, useful after a restart)
+```
+
+The phase of a Pod is a simple, high-level summary of where the Pod is in its lifecycle:
+
+- `Pending`: the Pod has been accepted by the Kubernetes cluster, but one or more of the containers has not been set up and made ready to run. This includes the time a Pod spends waiting to be scheduled as well as the time spent downloading container images over the network;
+- `Running`: the Pod has been bound to a node, and all of the containers have been created. At least one container is still running, or is in the process of starting or restarting;
+- `Succeeded`: all containers in the Pod have terminated successfully, and will not be restarted;
+- `Failed`: all containers in the Pod have terminated, and at least one container has terminated in failure. That is, the container either exited with non-zero status or was terminated by the system, and is not set for automatic restarting;
+- `Unknown`: for some reason the state of the Pod could not be obtained. This usually indicates a communication problem between the control plane and the node where the Pod should be running. Note that this phase is deprecated: Kubernetes has not set it since 2015.
+
+> [!TIP]
+>
+> The `STATUS` column displayed by `kubectl get pods` is not a field of the Pod and does not always correspond to the Pod phase: it's a "user-friendly" summary computed by the API server (kubectl just prints it).  
+> It starts from the phase and then replaces it with more specific information, when available, in this order (each step overrides the previous one):
+>
+> 1) the reason of the Pod (`status.reason`, e.g. `Evicted`);
+> 2) the state of the init containers (e.g. `Init:0/1`, `Init:Error`);
+> 3) the reason why a container is `waiting` (e.g. `ContainerCreating`, `CrashLoopBackOff`) or has `terminated` (e.g. `Completed`, `Error`, `OOMKilled`);
+> 4) `Terminating`, if the Pod is being deleted and its phase is not `Succeeded` or `Failed` yet.
+>
+> For example, sometimes you receive `ContainerCreating`, which is the **Waiting Reason** of a container, not a Pod phase.  
+> It typically appears after the Pod has been scheduled, while Kubernetes is pulling container images, creating the Pod sandbox, configuring networking, mounting volumes and starting the containers.  
+> During this time, the Pod phase is still `Pending`.
+>
+> ```console
+> $ kubectl get pod nginx
+> NAME    READY   STATUS              RESTARTS   AGE
+> nginx   0/1     ContainerCreating   0          3s
+> ```
+>
+> ```console
+> $ kubectl describe pod nginx
+> ...
+> Status:           Pending
+> ...
+> Containers:
+>   nginx:
+>     ...
+>     State:          Waiting
+>       Reason:       ContainerCreating
+>     Ready:          False
+>     Restart Count:  0
+> ...
+> ```
+>
+> To print only the phase, use `kubectl get pod nginx -o jsonpath='{.status.phase}'`.
+
+The following table shows the most common values of `STATUS` for each phase:
+
+| Pod phase            | STATUS shown by `kubectl get pods`    | Meaning                                                                                                                                                                                      |
+| -------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Pending`            | `Pending`                             | the Pod has not been scheduled yet (e.g. no node has enough resources or matches its `nodeSelector` or affinity, or all the nodes have taints that the Pod does not tolerate)                |
+| `Pending`            | `ContainerCreating`                   | the Pod has been scheduled and Kubernetes is preparing it (sandbox, network, volumes, image pull); if it lasts long, check the events (e.g. a Secret mounted as a volume does not exist)     |
+| `Pending`            | `ErrImagePull`, `ImagePullBackOff`    | the image cannot be pulled (wrong name or tag, registry not reachable, missing credentials); with `ImagePullBackOff` the kubelet waits before trying again                                   |
+| `Pending`            | `CreateContainerConfigError`          | a ConfigMap or Secret (or one of its keys) used in `env` or `envFrom` does not exist                                                                                                         |
+| `Pending`            | `Init:0/1`                            | the init containers are running (in this case, 0 of 1 have completed)                                                                                                                        |
+| `Pending`            | `Init:Error`, `Init:CrashLoopBackOff` | an init container failed and is going to be restarted                                                                                                                                        |
+| `Pending`            | `PodInitializing`                     | the init containers have completed and the app containers are starting                                                                                                                       |
+| `Running`            | `Running`                             | the containers are running (the `READY` column shows if they are also ready)                                                                                                                 |
+| `Running`            | `CrashLoopBackOff`                    | a container keeps terminating: the kubelet restarts it, waiting longer and longer between restarts (up to 5 minutes)                                                                         |
+| `Running`            | `Error`, `OOMKilled`, `Completed`     | a container has just terminated (with an error, killed for exceeding its memory limit, or with exit code 0) and is going to be restarted; if it happens again, it becomes `CrashLoopBackOff` |
+| `Running`            | `NotReady`                            | in a Pod with several containers, one container has completed and another one is still running, but the Pod is not ready                                                                     |
+| `Running`, `Pending` | `Terminating`                         | the Pod is being deleted (`metadata.deletionTimestamp` is set) and its containers are being stopped, within the grace period                                                                 |
+| `Succeeded`          | `Completed`                           | all the containers terminated with exit code 0 and will not be restarted (e.g. the Pods of a Job)                                                                                            |
+| `Failed`             | `Error`, `OOMKilled`                  | a container terminated with an error, or was killed for exceeding its memory limit, and will not be restarted (`restartPolicy: Never`)                                                       |
+| `Failed`             | `Init:Error`                          | an init container failed and will not be restarted (`restartPolicy: Never`)                                                                                                                  |
+| `Failed`             | `Error`                               | also an evicted Pod (e.g. it exceeded its `ephemeral-storage` limit): the reason `Evicted` is shown only by `kubectl describe pod`                                                           |
+| `Unknown`            | `Unknown`                             | deprecated phase: when a node stops responding, its Pods keep their last phase (usually `Running`)                                                                                           |
+
+Note that `Error`, `OOMKilled` and `Completed` can appear both while the Pod is `Running` (the container is going to be restarted) and when the Pod is in a final phase (`Succeeded` or `Failed`): the `RESTARTS` column and the `restartPolicy` of the Pod tell you which case it is.  
+For example, a Deployment whose container simply runs a command and exits shows `Completed` and then `CrashLoopBackOff`, because the Pods of a Deployment always have `restartPolicy: Always`.
+
+Moreover, right before a deleted Pod disappears, the kubelet moves it to a final phase (`Succeeded` or `Failed`): so, after `Terminating`, you may briefly see `Completed` or `Error`.
+
+The Pod's status also includes an array of `conditions`, which indicate whether the Pod has passed certain checkpoints.  
+Each condition has a `type` and a `status`, which can be `True`, `False` or `Unknown` (and, optionally, a `reason`, a `message` and the time of the last transition).  
+As a Pod progresses through its lifecycle, these conditions are set roughly in this order (the first one when the Pod is bound to a node by the scheduler, the others by the kubelet):
+
+- `PodScheduled`: the Pod has been scheduled on a node;
+- `PodReadyToStartContainers`: the Pod sandbox has been successfully created and networking configured. The sandbox and network are set up by the container runtime and CNI plugin;
+- `Initialized`: all init containers have completed successfully (for a Pod without init containers, this is set to `True` before sandbox creation);
+- `ContainersReady`: all containers in the Pod are ready;
+- `Ready`: the Pod is able to serve requests and should be added to the load balancing pools of all matching Services.
+
+Not every Pod will necessarily expose all conditions, depending on the Kubernetes version and enabled features.
+
+When running `kubectl describe pod <pod name>`, the Pod Conditions appear like this:
+
+```text
+Conditions:
+  Type                        Status
+  PodReadyToStartContainers   True
+  Initialized                 True
+  Ready                       True
+  ContainersReady             True
+  PodScheduled                True
+```
+
+Here is the sequence a Pod goes through, from its creation until it is ready, with the corresponding phase:
+
+```text
+                                       phase
+Pod created                            Pending
+     │
+     ▼
+PodScheduled = True                    Pending    (the scheduler has assigned the Pod to a node)
+     │
+     ▼
+PodReadyToStartContainers = True       Pending    (sandbox and network are ready)
+     │
+     ▼
+Initialized = True                     Pending    (all the init containers have completed)
+     │
+     ▼
+containers started                     Running
+     │
+     ▼
+ContainersReady = True                 Running    (all the containers are ready)
+     │
+     ▼
+Ready = True                           Running    (the Pod receives traffic from the Services)
+```
+
+Note that the phase becomes `Running` as soon as the containers have started, before they are ready: a Pod can be `Running` but not ready (`READY 0/1` in the output of `kubectl get pods`).
+
+Without a readiness probe, Kubernetes considers a container ready as soon as it starts, so `ContainersReady` and `Ready` become `True` immediately and the Services may begin routing traffic to an application that is still initializing.  
+However, many applications need additional time to initialize before they are actually ready to serve requests.  
+Readiness probes solve this problem by tying the Pod's `Ready` condition to the actual readiness of the application: for example, with a readiness probe with `initialDelaySeconds: 10`, the Pod stays `Running` but not ready for at least 10 seconds.
+
+---
+
+### 9.2 Probes
+
+As a developer of the application, you know best what it means for the application to be ready.
+
+You can tell Kubernetes how to check whether the application inside a container is actually ready by adding a `readinessProbe` to the definition of the container (probes are defined per container, in `spec.containers[*]`).  
+There are different ways to probe the application:
+
+- calling an API over HTTP, in the case of a web application: the probe succeeds if the response status code is between 200 and 399;
+
+  ```yaml
+      readinessProbe:
+        httpGet:
+          path: /api/ready
+          port: 8080
+  ```
+
+- checking that a particular TCP port accepts connections, for example for a database;
+
+  ```yaml
+      readinessProbe:
+        tcpSocket:
+          port: 3306
+  ```
+
+- executing a command inside the container (for example a custom script): the probe succeeds if the command exits with code 0.
+
+  ```yaml
+      readinessProbe:
+        exec:
+          command:
+          - sh
+          - -c
+          - test -f /app/is_ready
+  ```
+
+There is also a `grpc` probe, for applications that implement the gRPC Health Checking Protocol.
+
+Until the `readinessProbe` succeeds, the Pod is not ready and the Services do not forward any traffic to it.  
+The readiness probe keeps running for the whole life of the container: if it fails later (for `failureThreshold` consecutive times), the Pod is marked as not ready again and removed from the endpoints of the Services, but the container is **not** restarted; as soon as the probe succeeds again, the Pod receives traffic again.
+
+There are other options, like:
+
+- `initialDelaySeconds`: the number of seconds to wait after the container has started before running the first probe (for example if you know that the application takes a minimum amount of time to warm up); 0 by default;
+- `periodSeconds`: how often (in seconds) to run the probe; 10 by default;
+- `timeoutSeconds`: the number of seconds after which the probe times out, counting as a failure; 1 by default;
+- `failureThreshold`: the number of consecutive failures after which Kubernetes considers the probe failed; 3 by default;
+- `successThreshold`: the number of consecutive successes, after a failure, needed to consider the probe successful again; 1 by default (and it must be 1 for liveness and startup probes).
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: simple-webapp
+  labels:
+    name: simple-webapp
+spec:
+  containers:
+  - name: simple-app
+    image: simple-app
+    ports:
+    - containerPort: 8080
+    readinessProbe:
+      httpGet:
+        path: /api/ready
+        port: 8080
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      failureThreshold: 8
+```
+
+Readiness probes are particularly useful when there are multiple Pods behind a Service.  
+For example, when you have a ReplicaSet (or a Deployment) with multiple Pods, the Service routes traffic only to the ready Pods.  
+They are also important during a rolling update: a Deployment considers a new Pod available only when it is ready, so it does not remove the old Pods until the new ones can actually serve requests.
+
+A liveness probe can be configured on a container to periodically test whether the application in the container is healthy: for example, to detect an application stuck in a deadlock, whose process is still running but no longer works.  
+If the probe fails (for `failureThreshold` consecutive times), the kubelet kills the container, which is then restarted according to the `restartPolicy` of the Pod: the `RESTARTS` column increases and the events show `Container <name> failed liveness probe, will be restarted`.  
+Again, as a developer of the application, you must define what it means for the application to be healthy.
+
+```yaml
+      livenessProbe:
+        exec:
+          command:
+          - sh
+          - /app/is_healthy.sh
+```
+
+Similarly to readiness probes, we have:
+
+- `httpGet` option for API, `tcpSocket` for port, `exec` for commands (and `grpc`);
+- `initialDelaySeconds`, `periodSeconds`, `timeoutSeconds` and `failureThreshold` options.
+
+Some applications take a long time to start: a liveness probe with the usual timings could kill them before they have finished starting, while a liveness probe with a long `initialDelaySeconds` would detect real problems late.  
+For these applications, you can add a `startupProbe`: as long as it has not succeeded, the liveness and readiness probes are not run; once it succeeds, it is no longer run and the other probes take over.  
+If the startup probe does not succeed within `failureThreshold` × `periodSeconds` seconds, the container is killed and restarted, as with a failed liveness probe.
+
+```yaml
+      startupProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        failureThreshold: 30
+        periodSeconds: 10      # the application has up to 30 × 10 = 300 seconds to start
+      livenessProbe:
+        httpGet:
+          path: /healthz
+          port: 8080
+        periodSeconds: 10
+```
+
+> [!TIP]
+>
+> | Probe type | Objective                 | If it fails                                                                           |
+> | ---------- | ------------------------- | ------------------------------------------------------------------------------------- |
+> | Readiness  | Can it receive traffic?   | the Pod is removed from the endpoints of the Services (no restart)                    |
+> | Liveness   | Should it be restarted?   | the container is killed and restarted                                                 |
+> | Startup    | Has it finished starting? | the container is killed and restarted (until it succeeds, the other probes don't run) |
+
+---
+
+### 9.3 Logs, metrics and debugging
+
+Kubernetes provides several commands to inspect logs, monitor resource usage and troubleshoot applications.
+
+For the logs we can use `kubectl logs`, which shows what the containers write to their standard output and standard error.  
+In a Pod with several containers, by default it shows the logs of the first container (or of the one set with the `kubectl.kubernetes.io/default-container` annotation), and it prints which container it chose:
+
+```console
+$ kubectl logs webapp
+Defaulted container "app" out of: app, log-agent
+...
+```
+
+We can select a specific container using the `--container` or `-c` option, or retrieve the logs of all the containers of a Pod with the option `--all-containers` (adding `--prefix` to see which container each line comes from).
+
+For metrics, Kubernetes relies on the `Metrics Server`, an add-on component that is not installed by default in every cluster.  
+A single Metrics Server (a Deployment, usually in the `kube-system` namespace) serves the whole cluster.  
+The Metrics Server periodically retrieves resource usage metrics from the kubelets running on each node, aggregates them and exposes them through the Kubernetes Metrics API (`metrics.k8s.io`).  
+Each kubelet embeds `cAdvisor`, which collects CPU and memory usage statistics from the running containers.
+
+With Minikube we can enable it with the command `minikube addons enable metrics-server`.  
+For the other environments, you can run `kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml`.
+
+> [!NOTE]
+>
+> Whether the Metrics Server is already installed depends on the environment: for example, in Minikube it's an addon that must be enabled, clusters created with kubeadm don't include it, while many managed Kubernetes services install it automatically.  
+> In test clusters whose kubelets use self-signed certificates, the Metrics Server may fail to connect to them: in that case, you can add the `--kubelet-insecure-tls` argument to its container (never in production).
+
+Once this component is running, you can see the current resource usage with the command `kubectl top node [node]` or `kubectl top pod [pod]`.
+
+```console
+$ kubectl top node
+NAME           CPU(cores)   CPU(%)   MEMORY(bytes)   MEMORY(%)
+controlplane   184m         1%       895Mi           1%
+node01         24m          0%       168Mi           0%
+```
+
+```console
+$ kubectl top pod
+NAME       CPU(cores)   MEMORY(bytes)
+elephant   13m          30Mi
+lion       1m           16Mi
+rabbit     104m         250Mi
+```
+
+Without the Metrics Server, these commands fail because the Metrics API is not available:
+
+```console
+$ kubectl top pod
+error: Metrics API not available
+```
+
+The Metrics Server provides **current resource usage** (CPU and memory) only, mainly for `kubectl top` and for the autoscalers (such as the Horizontal Pod Autoscaler).  
+It is **not** a full monitoring solution and does not store historical metrics, because it keeps metrics only in memory and does not persist them to disk.  
+For long-term monitoring and alerting, tools such as Prometheus and Grafana are typically used.
+
+> [!TIP]
+>
+> A common troubleshooting workflow is:
+>
+> 1. `kubectl get pods` (look at `STATUS`, `READY` and `RESTARTS`)
+> 2. `kubectl describe pod <pod>` (look at the state of the containers, the conditions and the `Events` at the bottom)
+> 3. `kubectl logs <pod>` (with `--previous` if the container has been restarted)
+> 4. `kubectl exec -it <pod> -- sh`
+>
+> In many cases, these four commands are sufficient to identify the cause of a failing Pod.  
+> If the image has no shell (e.g. distroless images), you can add an ephemeral debug container to the running Pod with `kubectl debug -it <pod> --image=busybox --target=<container> --profile=general`: thanks to `--target`, the debug container shares the process namespace of that container, so it can see its processes.
+
+Useful commands:
+
+- `kubectl logs <pod>`: displays the logs of the (default) container of a Pod;
+- `kubectl logs -f <pod>`: streams the logs in real time (similar to `tail -f`);
+- `kubectl logs <pod> -c <container>`: displays the logs of a specific container in a multi-container Pod;
+- `kubectl logs <pod> --all-containers --prefix`: displays the logs of all the containers of a Pod, prefixing each line with its source;
+- `kubectl logs --previous <pod>` (or `-p`): displays the logs of the previous instance of the container, the one that terminated before the last restart (useful for troubleshooting `CrashLoopBackOff` or a container restarted by a liveness probe);
+- `kubectl logs <pod> --tail=20` / `--since=1h`: displays only the last 20 lines / the logs of the last hour;
+- `kubectl logs deploy/<deployment>`: displays the logs of a Pod of the Deployment (`--all-pods` for all of them);
+- `kubectl logs -l <label>=<value>`: displays the logs of the Pods with that label (by default, only the last 10 lines of each container);
+- `kubectl exec <pod> -- <command>`: executes a command inside a running container of a Pod (add `-it` for an interactive shell);
+- `kubectl describe <resource> <name>`: displays detailed information about a resource, including its configuration, status, conditions and events;
+- `kubectl events --for pod/<pod>`: displays the events of a Pod (`kubectl get events` displays all the events of the namespace);
+- `kubectl top pod`: displays the current CPU and memory usage of Pods (`--containers` for each container, `--sort-by=cpu` or `--sort-by=memory` to sort them);
+- `kubectl top node`: displays the current CPU and memory usage of Nodes;
+- `kubectl debug -it <pod> --image=<image> --target=<container>`: adds an ephemeral debug container to a running Pod.
+
+---
+
+### 9.4 API versions
 
 When an API version is at `v1` (or more generally `vX`, like `v2`), it means that it is a Generally Available stable version.  
 But there are other version kinds, like the following:
@@ -7598,7 +7422,7 @@ that you can combine in interesting ways, like `--runtime-config=api/all=false,a
 
 ---
 
-### API deprecations
+### 9.5 API deprecations
 
 Deprecated and removed APIs are different concepts.
 
@@ -7684,454 +7508,227 @@ The `kubectl convert` command may not be available on the system because it is a
 
 ---
 
-## Custom resources and controllers
+## Part 10 – Application deployment
 
-### Controllers & reconciliation
+### 10.1 Blue/green and canary
 
-The behavior of many of the resources seen until now (like `Deployments`, `ReplicaSets` and `Jobs`) is implemented by controllers.  
-A controller continuously watches one or more resources and takes actions to make the actual state match the desired state.  
-The built-in controllers run inside the `kube-controller-manager` (for example `deployment-controller`, `replicaset-controller`, `job-controller` and `endpointslice-controller`), while the ones that interact with a cloud provider run inside the `cloud-controller-manager`.
+Besides the built-in Deployment strategies (`RollingUpdate` and `Recreate`), there are other application deployment strategies commonly used in production, such as:
 
-> [!NOTE]
+- Blue-Green deployment;
+- Canary deployment.
+
+These are not configurable in the Kubernetes Deployment manifest, but they can be implemented in other ways.  
+They are best implemented with tools that can split the traffic by percentage, such as service meshes like Istio, the Gateway API (`HTTPRoute` with weighted backends) or tools like Argo Rollouts and Flagger, but let's see how to implement them with Kubernetes primitives (Deployments and Services).
+
+The **Blue-Green deployment** procedure is as follows:
+
+1) the old version (blue) is deployed;
+2) all the traffic is routed to the old (blue) version;
+3) the new version (green) is deployed alongside the old version (blue);
+4) tests are performed on the new version while public traffic is still routed to the old version;
+5) once all tests are passed, we switch traffic to the new (green) version, all at once.
+
+and we can implement it in Kubernetes in this way:
+
+1) create the first deployment called `blue`, whose Pods have the labels `app: web` and `version: v1`;
+
+    ```yaml
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: blue
+    spec:
+      replicas: 3
+      selector:
+        matchLabels:
+          app: web
+          version: v1
+      template:
+        metadata:
+          labels:              # the Service selects the Pods through these labels
+            app: web
+            version: v1
+        spec:
+          containers:
+          - name: web
+            image: web:1.0
+    ```
+
+2) create a service with the selector set as `app: web` and `version: v1`;
+
+    ```yaml
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: web
+    spec:
+      selector:
+        app: web
+        version: v1
+      ports:
+      - port: 80
+    ```
+
+3) create the second deployment called `green`, identical to the first one except for the name, the label `version: v2` (in both the selector and the Pod template) and the new image;
+
+    ```yaml
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: green
+    spec:
+      replicas: 3
+      selector:
+        matchLabels:
+          app: web
+          version: v2
+      template:
+        metadata:
+          labels:
+            app: web
+            version: v2
+        spec:
+          containers:
+          - name: web
+            image: web:2.0
+    ```
+
+4) perform validation tests against the Green deployment (for example through a second, internal Service that selects `version: v2`, or with `kubectl port-forward deployment/green 8080:80`);
+5) change the selector on the service to `version: v2`.
+
+    ```bash
+    kubectl patch service web -p '{"spec":{"selector":{"version":"v2"}}}'
+    ```
+
+    or, equivalently, `kubectl set selector service web 'app=web,version=v2'` (which replaces the whole selector).
+
+If something goes wrong, the rollback is immediate: just set the selector back to `version: v1`, since the blue Pods are still running.  
+Once the green version is stable, you can delete the `blue` Deployment.
+
+> [!IMPORTANT]
 >
-> Kubernetes does not necessarily have a single controller for every resource.  
-> For example:
+> A Service selects **Pods**: the labels it uses must be in the Pod template (`spec.template.metadata.labels`), not only in the `metadata.labels` of the Deployment, which are not copied to the Pods.  
+> With the labels only in the metadata of the Deployment, the Service would have no endpoints.
 >
-> - the `Deployment` controller creates and manages the `ReplicaSet`, while the `ReplicaSet` controller ensures that the desired number of `Pods` exists;
-> - the behavior of the `Service` is split across several components: the EndpointSlice controller creates and updates the `EndpointSlices` (owned by the `Service`) with the addresses of the `Pods` matching the selector, `kube-proxy` on each node configures the rules that route the traffic to those addresses and, only for `LoadBalancer` Services, the service controller inside the cloud-controller-manager creates the external load balancer.
+> Moreover, the selectors of the two Deployments must not overlap (that's why both contain `version`), otherwise each Deployment would also consider the Pods of the other one as its own.
+
+The **Canary deployment** procedure is as follows:
+
+1) the old version is deployed at full desired replicas;
+2) all the traffic is routed to the old version (primary);
+3) the new version is deployed with few replicas (canary);
+4) we start to route only a small portion of traffic to the canary deployment;
+5) tests are performed on the new version, which is partly live with its few replicas;
+6) once all tests are passed, we upgrade the primary deployment with the new version of the application (maybe making use of the RollingUpdate strategy);
+7) we delete the canary deployment.
+
+and we can implement it in Kubernetes in this way (here the label `track` describes the role of the Pods, `stable` or `canary`, instead of their version, because at the end the primary Deployment will also run the new version):
+
+1) create the first deployment called `primary`, with the full amount of replicas (for example 5 Pods), whose Pods have the labels `app: front-end` and `track: stable`;
+
+    ```yaml
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: primary
+    spec:
+      replicas: 5
+      selector:
+        matchLabels:
+          app: front-end
+          track: stable
+      template:
+        metadata:
+          labels:
+            app: front-end
+            track: stable
+        spec:
+          containers:
+          - name: front-end
+            image: front-end:1.0
+    ```
+
+2) create a service with the selector set as `app: front-end` and `track: stable`;
+
+    ```yaml
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: front-end
+    spec:
+      selector:
+        app: front-end
+        track: stable
+      ports:
+      - port: 80
+    ```
+
+3) create the second deployment called `canary`, with a reduced amount of replicas (for example 1 Pod), whose Pods have the labels `app: front-end` and `track: canary`, and the new image;
+
+    ```yaml
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: canary
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: front-end
+          track: canary
+      template:
+        metadata:
+          labels:
+            app: front-end
+            track: canary
+        spec:
+          containers:
+          - name: front-end
+            image: front-end:2.0
+    ```
+
+4) change the Service selector to `app: front-end` only, so that the Pods of both Deployments become endpoints of the same Service: with 5 + 1 Pods, the canary receives about 1/6 (≈ 17%) of the traffic;
+
+    ```bash
+    kubectl set selector service front-end 'app=front-end'
+    ```
+
+5) tests are performed on the new version;
+6) once we are confident, we upgrade the Pod version of the primary deployment to the new one;
+
+    ```bash
+    kubectl set image deployment primary front-end=front-end:2.0
+    ```
+
+7) the canary deployment is deleted.
+
+    ```bash
+    kubectl delete deployment canary
+    ```
+
+If the canary does not work as expected, the rollback is immediate: just delete the `canary` Deployment (or scale it to 0).
+
+One of the caveats of the canary deployment is that we have limited control over the split of traffic through the deployments.  
+The traffic split is going to be governed by the number of Pods present in each deployment.  
+For example, we cannot route 1% of traffic to the canary deployment (we could if we had 100 Pods).  
+A service mesh such as Istio (or the Gateway API) allows routing traffic based on explicit percentages (for example 1%, 5%, 10%, 25%, 50%, etc.), independently of the number of Pods backing each Deployment.
+
+> [!IMPORTANT]
 >
->   ```text
->   Deployment                        Service
->       │                                 │
->       │ Deployment controller           │ EndpointSlice controller
->       ▼                                 ▼
->   ReplicaSet                        EndpointSlices
->       │                                 │
->       │ ReplicaSet controller           │ kube-proxy (on each node)
->       ▼                                 ▼
->   Pods                              iptables / IPVS / nftables rules
->   ```
+> Kubernetes Services do **not** support weighted traffic routing.  
+> When multiple Pods match the Service selector, kube-proxy distributes the **connections** (not the single requests) among the ready endpoints, each with the same probability.  
+> The traffic distribution therefore depends mainly on the number of Pods backing each Deployment (and, with long-lived connections, it can be uneven).
 
-The controller is a process that runs in the background and continuously monitors the status of the resources it is supposed to manage.  
-When we create or update a resource, the desired state is persisted by the API server in etcd. Controllers continuously observe the resources through the Kubernetes API (with watch requests) and reconcile the actual state with the desired state, often reporting the observed state in the `status` of the object.
-
-When a resource is deleted, the API server usually removes it from etcd immediately, with two main exceptions:
-
-- if the object has finalizers (`metadata.finalizers`), the deletion request is recorded by setting `metadata.deletionTimestamp`, and the object is actually deleted only when the corresponding controllers have done their cleanup and removed all their finalizers;
-- `Pods` are deleted gracefully: they stay in the `Terminating` state until the kubelet has stopped their containers (by default, within 30 seconds).
-
-> [!TIP]
->
-> By default, `kubectl delete` waits until the object is actually deleted (`--wait=false` returns immediately).  
-> If the controller that handles a finalizer is not running anymore (for example, because the operator has been uninstalled), the object is never deleted: the finalizer can be removed manually with `kubectl patch <resource> <name> --type=merge -p '{"metadata":{"finalizers":null}}'`, skipping the cleanup.
+| Pattern       | Downtime                   | Traffic shift    | Rollback                                   | Extra resources                          |
+| ------------- | -------------------------- | ---------------- | ------------------------------------------ | ---------------------------------------- |
+| Recreate      | Yes                        | Immediate        | `kubectl rollout undo` (with new downtime) | None                                     |
+| RollingUpdate | No (with readiness probes) | Progressive      | `kubectl rollout undo` (progressive)       | Up to `maxSurge` Pods                    |
+| Blue-Green    | No                         | Immediate switch | Very fast (switch the selector back)       | Double, until the old version is removed |
+| Canary        | No                         | Progressive      | Very fast (delete the canary)              | A few Pods                               |
 
 ---
 
-### Custom resources and CustomResourceDefinitions (CRDs)
-
-Custom resources are an extension of the Kubernetes API that is not necessarily available in a default Kubernetes installation.
-
-```text
-             CRD
-              │
-              │ defines
-              ▼
-       Custom Resource
-              │
-              │ stored through
-              ▼
-     Kubernetes API Server
-              │
-              ├──────────────► etcd
-              │
-              │ watched by
-              ▼
-      Custom Controller
-              │
-              │ reconciliation
-              ▼
-      Desired → Actual
-              │
-      ┌───────┴────────┐
-      ▼                ▼
-Kubernetes          External
-resources           systems
-```
-
-`CustomResourceDefinition`s (`CRD`s) extend the Kubernetes API.  
-Custom resources are objects stored and managed through that API.
-
-Kubernetes provides two ways to add custom resources:
-
-- CRDs, which are simple and can be created without any programming;
-- API aggregation, which requires programming (an additional API server, to which the main API server forwards the requests) but allows more control over the behavior of the API.
-
-In this chapter we focus on CRDs.
-
----
-
-### Custom controllers
-
-A custom controller gives those objects a behavior by continuously reconciling their desired state with their actual state.
-
-```text
-    ┌──────────────────┐
-    │   Kubernetes     │
-    │    API Server    │
-    └────────┬─────────┘
-             │
-  ┌──────────┴──────────┐
-  ▼                     ▼
-etcd              Custom Controller
-                        │
-                        │ reconciliation
-                        ▼
-                  External system
-```
-
-Controllers are usually written in Go.  
-Here is an example of the [Deployment controller](https://github.com/kubernetes/kubernetes/blob/master/pkg/controller/deployment/deployment_controller.go).
-
-Once the CRD has been created, the Kubernetes API server exposes the new resource type and we can perform CRUD operations on its instances. Create and update requests are validated against the CRD's OpenAPI schema. Invalid objects are rejected by the API server.
-
-If we want the resource to actually have a behavior, we also need to take care of a **custom controller**.
-
-> [!TIP]
->
-> A custom resource does not require a custom controller.  
-> A controller is needed when we want the custom resource to trigger some additional behavior or reconciliation logic.
-
----
-
-### An example of custom resources, CRDs, and custom controllers
-
-For example, we can make a custom resource called `FlightTicket` whose controller watches the resource and, when its desired state changes, contacts an external API to perform the actual ticket booking actions.
-
-![CRD FlightTicket](./images/05-crd-FlightTicket.png "CRD FlightTicket")
-
-But in order to use a custom resource, we have to first **define** it.  
-For that, we need a `CustomResourceDefinition`
-
-```yaml
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: flighttickets.flights.com # Must be <plural>.<group>
-spec:
-  scope: Namespaced # Either Namespaced or Cluster
-  group: flights.com # The API group used in the resource's apiVersion
-  names: # Names of the resource
-    plural: flighttickets # To be used in the URL: /apis/<group>/<version>/<plural>
-    singular: flightticket # To be used as an alias on the CLI and for display
-    kind: FlightTicket # Normally the CamelCased singular type. Your resource manifests use this
-    shortNames: # Allow shorter strings to match your resource on the CLI
-    - ft
-  versions: # List of versions supported by this CustomResourceDefinition
-    - name: v1
-      served: true # Each version can be enabled/disabled by this Served flag
-      storage: true # One and only one version must be marked as the storage version
-      schema: # Required: defines the fields (and the type of their values) that the resource can contain, usually under spec
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              properties:
-                from:
-                  type: string
-                to:
-                  type: string
-                number:
-                  type: integer
-                  minimum: 1 # We can also specify validation values like minimum and maximum
-                  maximum: 10
-              required:
-                - from
-                - to
-                - number
-```
-
-> [!NOTE]
->
-> The scope field determines whether instances of the custom resource are namespaced or cluster-scoped.  
-> Custom Resource instances can be Namespaced or Cluster-scoped but **the CRD itself is always cluster-scoped**.
-
-The name of the CRD must be `<plural>.<group>`, otherwise the API server rejects it with an error like `metadata.name: Invalid value: "flightticket.flights.com": must be spec.names.plural+"."+spec.group`.
-
-We can now create the `CRD` with the usual command
-
-```console
-$ kubectl create -f flightticket-custom-definition.yaml
-customresourcedefinition.apiextensions.k8s.io/flighttickets.flights.com created
-```
-
-You can also get details of the created `CRD` with the following commands
-
-```bash
-kubectl explain flightticket
-kubectl explain flightticket.spec
-kubectl api-resources | grep flight
-kubectl api-resources --api-group=flights.com
-kubectl get crd
-```
-
-For example:
-
-```console
-$ kubectl api-resources --api-group=flights.com
-NAME            SHORTNAMES   APIVERSION       NAMESPACED   KIND
-flighttickets   ft           flights.com/v1   true         FlightTicket
-
-$ kubectl explain flightticket.spec
-GROUP:      flights.com
-KIND:       FlightTicket
-VERSION:    v1
-
-FIELD: spec <Object>
-
-
-DESCRIPTION:
-    <empty>
-FIELDS:
-  from  <string> -required-
-    <no description>
-
-  number        <integer> -required-
-    <no description>
-
-  to    <string> -required-
-    <no description>
-```
-
-and manage its resources
-
-```yaml
-apiVersion: flights.com/v1
-kind: FlightTicket
-metadata:
-  name: my-flight-ticket
-spec:
-  from: Mumbai
-  to: London
-  number: 2
-```
-
-```console
-$ kubectl create -f flightticket.yaml
-flightticket.flights.com/my-flight-ticket created
-
-$ kubectl get ft
-NAME               AGE
-my-flight-ticket   18s
-
-$ kubectl delete -f flightticket.yaml
-flightticket.flights.com "my-flight-ticket" deleted
-```
-
-Like for the built-in resources, `kubectl` accepts the plural (`flighttickets`), the singular (`flightticket`), the short names (`ft`), the kind (`FlightTicket`) and the fully qualified name (`flighttickets.flights.com`, useful when two API groups have resources with the same name).
-
-The API server validates each custom resource against the schema of the CRD. For example:
-
-```console
-$ kubectl create -f flightticket.yaml   # with number: 11
-The FlightTicket "my-flight-ticket" is invalid: spec.number: Invalid value: 11: spec.number in body should be less than or equal to 10
-
-$ kubectl create -f flightticket.yaml   # without the to field
-The FlightTicket "my-flight-ticket" is invalid: spec.to: Required value
-
-$ kubectl create -f flightticket.yaml   # with the unknown field seat: 12A
-Error from server (BadRequest): error when creating "flightticket.yaml": FlightTicket in version "v1" cannot be handled as a FlightTicket: strict decoding error: unknown field "spec.seat"
-```
-
-Unknown fields are rejected because `kubectl` validates strictly by default: with `--validate=warn` or `--validate=false`, the object is created and the unknown fields are removed (pruned) before it is stored in etcd.
-
-A custom resource cannot be created before its CRD. For example, when the CRD and the resource are created together, `kubectl` may fail with
-
-```text
-error: resource mapping not found for name: "my-flight-ticket" namespace: "" from "flightticket.yaml": no matches for kind "FlightTicket" in version "flights.com/v1"
-ensure CRDs are installed first
-```
-
-and, in this case, we can wait for the CRD to be ready with `kubectl wait --for=condition=Established crd/flighttickets.flights.com` before creating the resources.
-
-> [!CAUTION]
->
-> Deleting a CRD also deletes all its custom resources, in all the namespaces.  
-> After that, `kubectl get ft` fails with `Unable to list "flights.com/v1, Resource=flighttickets": the server could not find the requested resource`, and if the CRD is created again, it starts empty.
-
-That solves the first part of our problem: being able to create and manage any kind of object type that we want on Kubernetes.  
-But this only allows us to create, manage and store these objects through the Kubernetes API (which then stores them in etcd). Without a controller, Kubernetes does not know what additional actions should be performed (for example, when a FlightTicket is created or modified).  
-The second part is building a controller that can watch when these resources are created and perform actions based on the resource's specification.
-
-```text
-User
-  │
-  │ create/update FlightTicket
-  ▼
-API Server
-  │
-  ├──────────────► etcd
-  │
-  │ watch
-  ▼
-Custom Controller
-  │
-  │ book the flight
-  ▼
-External API
-```
-
-> [!NOTE]
->
-> The resource controller should not read from etcd directly.  
-> It reads objects through the Kubernetes API server (typically via client-go/controller-runtime), even though the object is physically stored in etcd.  
-> The API server is the abstraction layer through which Kubernetes resources are accessed.
-
-Now we need to monitor the status of the objects and perform the actions on the corresponding external services, through the custom controller.  
-A controller is any process or code that runs in a loop and continuously monitors the Kubernetes cluster, listening to events of specific objects being changed and performing the appropriate actions in response.
-
-> [!TIP]
->
-> Controllers are commonly written in Go and can use Kubernetes libraries such as client-go and controller frameworks such as controller-runtime.  
-> They can also be written in other languages (there are official client libraries for Python, Java, JavaScript, C# and others), but without an equivalent of client-go's informers you don't get built-in caching and queuing: direct calls to the API can become expensive and you would need to build your own frameworks to manage them.
-
-The Kubernetes [sample-controller](https://github.com/kubernetes/sample-controller) repository provides an example of how a custom controller can be implemented.  
-In a real project, the controller would also require the appropriate API types, clients, RBAC configuration and deployment.  
-Here follows an example of `controller.go` with our custom logic.
-
-> [!NOTE]
->
-> Controller development is beyond the CKAD scope. The following is included only to illustrate how a controller implements the reconciliation logic.
-
-```Go
-package flightticket
-
-var controllerKind =
-    flightsv1.SchemeGroupVersion.WithKind("FlightTicket")
-
-// < Code hidden >
-
-// Run begins watching and syncing.
-func (dc *FlightTicketController) Run(workers int,
-    stopCh <-chan struct{}) {
-    // ...
-}
-
-// < Code hidden >
-
-// Call BookFlightAPI
-func (dc *FlightTicketController) callBookFlightAPI(obj interface{}) {
-    // ...
-}
-
-// < A lot of code hidden >
-```
-
-We can then build our custom controller
-
-```console
-$ go build -o sample-controller .
-go: downloading k8s.io/client-go v0.0.0-20211001003700-dbfa30b9d908
-go: downloading golang.org/x/text v0.3.6
-```
-
-and run it specifying the `kubeconfig` file, which the controller can use to authenticate to the Kubernetes API.
-
-```console
-$ ./sample-controller -kubeconfig=$HOME/.kube/config
-I1013 02:11:07.489479 40117 controller.go:115] Setting up event handlers
-I1013 02:11:07.489701 40117 controller.go:156] Starting FlightTicket controller
-```
-
-Once the controller is ready, we can decide how to distribute it.  
-We don't want to build and run it each time; instead, we may package the controller in a container image, and then run it inside the cluster as a `Pod` or a `Deployment`.
-
-Inside the cluster, the controller does not need a kubeconfig file: it authenticates with the token of its `ServiceAccount`, which needs the permissions to read and update the custom resources. For example:
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: flightticket-controller
-rules:
-- apiGroups: ["flights.com"]
-  resources: ["flighttickets"]
-  verbs: ["get", "list", "watch", "update", "patch"]
-```
-
-bound to the `ServiceAccount` with `kubectl create clusterrolebinding flightticket-controller --clusterrole=flightticket-controller --serviceaccount=default:flightticket-controller`.  
-The same `ClusterRole` can be created with `kubectl create clusterrole flightticket-controller --verb=get,list,watch,update,patch --resource=flighttickets`: `kubectl` finds the API group (`flights.com`) by itself.
-
-> [!TIP]
->
-> The custom resources are not included in the default `view`, `edit` and `admin` ClusterRoles.  
-> To add them, create a `ClusterRole` with the label `rbac.authorization.k8s.io/aggregate-to-view: "true"` (or `aggregate-to-edit`, `aggregate-to-admin`): its rules are automatically added to that role.
->
-> ```yaml
-> apiVersion: rbac.authorization.k8s.io/v1
-> kind: ClusterRole
-> metadata:
->   name: flightticket-view
->   labels:
->     rbac.authorization.k8s.io/aggregate-to-view: "true"
-> rules:
-> - apiGroups: ["flights.com"]
->   resources: ["flighttickets"]
->   verbs: ["get", "list", "watch"]
-> ```
-
----
-
-### Operators
-
-We've seen until now the **CRD** and the **Custom Controller**, which are two separate entities that are necessary to make use of **custom resources** with a behavior.  
-An **Operator** is a software application that extends Kubernetes with custom resources and controllers, combining them to automate the management of a specific application or system.
-
-```text
-Operator
-│
-├── CRDs
-│
-├── Controllers
-│
-└── Application-specific automation logic
-```
-
-An Operator usually installs the required `CRDs` and runs its controllers inside the cluster, often as a `Deployment`.  
-But an Operator can do much more than just deploying those two components: its controllers contain the knowledge needed to operate the application.  
-For example, one of the first operators was the etcd operator by CoreOS (archived in 2020 and no longer maintained), which provided the following CRDs, controllers and capabilities:
-
-| CRD         | custom controller  | capability                        |
-| ----------- | ------------------ | --------------------------------- |
-| EtcdCluster | Etcd controller    | deploy and manage an etcd cluster |
-| EtcdBackup  | Backup controller  | manage backups                    |
-| EtcdRestore | Restore controller | manage restore operations         |
-
-And you can manage the above operations by simply creating a custom resource.
-
-A widely used operator today is the Prometheus Operator, which manages Prometheus and its monitoring configuration through custom resources like `Prometheus`, `Alertmanager`, `ServiceMonitor` and `PrometheusRule`.
-
-Kubernetes operators typically do what a human operator would do to manage a specific application (installing it, maintaining it, taking backups and restoring them when needed).
-
-Many operators are available on [OperatorHub](https://operatorhub.io/), where you can find operators for many popular applications.
-
-> [!TIP]
->
-> If there isn't an operator in the ecosystem that implements the desired behavior, it's possible to [create a customized one](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/#writing-operator).  
-> There are several libraries and tools that can be used to write a cloud native operator, like [Operator Framework](https://operatorframework.io/), [kubebuilder](https://book.kubebuilder.io/) and [Kopf](https://github.com/nolar/kopf) (Python).
-
-Useful commands to discover and use the resources added by CRDs and operators:
-
-- `kubectl get crd`: list the CRDs installed in the cluster;
-- `kubectl get crd <name> -o yaml` (or `kubectl describe crd <name>`): view the group, versions, scope, names and schema of a CRD;
-- `kubectl api-resources --api-group=<group>`: list the resources of an API group, with their short names, version, scope and kind;
-- `kubectl explain <kind>[.<field>] [--recursive]`: view the fields of a custom resource, as defined in the schema of its CRD;
-- `kubectl get <resource> [-A]`: list the custom resources (for example `kubectl get ft -A`);
-- `kubectl wait --for=condition=Established crd/<name>`: wait until a CRD is ready to be used.
-
----
-
-## Helm Fundamentals
+### 10.2 Helm
 
 Kubernetes is really powerful in managing complex infrastructures at scale, but we humans tend to struggle with this complexity.
 
@@ -8574,7 +8171,7 @@ Useful commands:
 
 ---
 
-## Kustomize Basics
+### 10.3 Kustomize
 
 Kustomize lets us customize existing Kubernetes manifests without modifying the original YAML files.  
 This is particularly useful when the same application needs different configurations for different environments: it lets us reuse our configurations and only modify what needs to be changed on a per-environment basis (avoiding repeating the configuration manifests for both the common and different parts).
@@ -8582,7 +8179,7 @@ This is particularly useful when the same application needs different configurat
 Kustomize comes built into `kubectl`; however, you may want to install the Kustomize CLI separately to get the latest version.  
 `kubectl kustomize <directory>` is the equivalent of `kustomize build <directory>`, and `kubectl version --client` also shows the version of the embedded Kustomize (v5.7.1 in kubectl v1.34).
 
-### The kustomization.yaml file and the folder structure
+#### The kustomization.yaml file and the folder structure
 
 The `kustomization.yaml` file describes:
 
@@ -8679,9 +8276,7 @@ spec:
 > In many examples you'll find the older `commonLabels` field (`commonLabels: {goal: CKAD}`), which has the same effect as `labels` with `includeSelectors: true`.  
 > `commonLabels` still works, but it is deprecated: `kustomize build` prints `# Warning: 'commonLabels' is deprecated. Please use 'labels' instead.` and `kustomize edit fix` converts it automatically.
 
----
-
-### Building and applying Kustomize configurations
+#### Building and applying Kustomize configurations
 
 When running `kustomize build <directory>`, Kustomize looks for a file named, by default, `kustomization.yaml` (`kustomization.yml` and `Kustomization` are accepted too), in the specified directory.
 
@@ -8750,9 +8345,7 @@ kustomize build kubernetes_manifests/ | kubectl delete -f -
 kubectl delete -k kubernetes_manifests/
 ```
 
----
-
-### Organizing resources into directories
+#### Organizing resources into directories
 
 In some cases, we would like to separate configuration parts in different folders in a way that makes more sense
 
@@ -8859,9 +8452,7 @@ resources:
 and when we do that, Kustomize will look for a `kustomization.yaml` file in those directories and import all of those (if a directory has no kustomization file, the build fails with `unable to find one of 'kustomization.yaml', 'kustomization.yml' or 'Kustomization' in directory ...`).  
 This approach will allow us to keep the structure as clean as possible and to apply the changes still with one command.
 
----
-
-### Transformers
+#### Transformers
 
 Kustomize has several built-in transformers (you can even create your own).
 
@@ -9084,9 +8675,7 @@ images:
     digest: sha256:25a0d4 # shortened digest
 ```
 
----
-
-### Patches
+#### Patches
 
 Kustomize patches provide another method to modify Kubernetes configurations.
 
@@ -9509,9 +9098,7 @@ we'll see how to delete the second container from that list.
   >
   > In this case, since a strategic merge patch cannot express the removal of a list item by simply omitting it, we have to use the delete directive `$patch: delete`.
 
----
-
-### Base and overlays
+#### Base and overlays
 
 Kustomize commonly uses a base and overlays structure to manage configurations that are shared across multiple environments:
 
@@ -9661,9 +9248,7 @@ kubernetes/
             └── kustomization.yaml
 ```
 
----
-
-### Components
+#### Components
 
 Components allow us to define reusable pieces of configuration logic that can be included in multiple overlays.  
 They are useful when an application has optional features that need to be enabled only in a subset of environments.  
@@ -9715,7 +9300,7 @@ Some optional features, however, need to be enabled only for certain configurati
 
 Instead of duplicating the configuration for these features in each overlay, we can define them as reusable Components.
 
-![Kustomize Components example](./images/06-kustomize-components-diagram.png "Kustomize Components example")
+![Kustomize Components example](./images/05-kustomize-components-diagram.png "Kustomize Components example")
 
 For example, we can organize the configuration as follows:
 
@@ -9860,7 +9445,7 @@ Here is a comparison of bases, overlays and components.
 
 ---
 
-### Kustomize vs Helm
+### 10.4 Kustomize vs Helm
 
 Helm and Kustomize partly address the same issue: providing a way to modify Kubernetes applications on a per-environment basis.  
 In order to understand which fits best for our needs between Helm and Kustomize, we need to understand some differences.
@@ -9889,39 +9474,404 @@ whereas Helm is a little bit more complex but carries extra features as well (li
 
 ---
 
-## Info about the CKAD (Certified Kubernetes Application Developer) certification exam
+## Part 11 – Extending Kubernetes
 
-Currently, the CKAD exam consists of 15–20 performance-based tasks.  
-Candidates have 2 hours to complete the exam.  
-The exam environment uses a recent Kubernetes version (v1.37 at the time of writing), aligned with each new minor release within about 4–8 weeks.
+### 11.1 Custom resources and CustomResourceDefinitions (CRD)
 
-You are allowed to consult only the resources explicitly permitted during the exam: the Kubernetes documentation (`kubernetes.io/docs`), the Kubernetes blog (`kubernetes.io/blog`) and, for the CKAD, the Helm documentation (`helm.sh/docs`).
+Custom resources are an extension of the Kubernetes API that is not necessarily available in a default Kubernetes installation.
 
-The registration includes two attempts to pass the exam within 12 months (so you also have a retake) and two sessions of the killer.sh exam simulator, each one with 36 hours of access.
+```text
+             CRD
+              │
+              │ defines
+              ▼
+       Custom Resource
+              │
+              │ stored through
+              ▼
+     Kubernetes API Server
+              │
+              ├──────────────► etcd
+              │
+              │ watched by
+              ▼
+      Custom Controller
+              │
+              │ reconciliation
+              ▼
+      Desired → Actual
+              │
+      ┌───────┴────────┐
+      ▼                ▼
+Kubernetes          External
+resources           systems
+```
 
-The exam runs in a remote desktop with a terminal, a browser for the allowed documentation and the VSCodium editor.  
-You can also use the editor to take notes; for example, you can note the numbers of the questions that you want to come back to later and their weight.
+`CustomResourceDefinitions`, or `CRD`, extend the Kubernetes API.  
+Custom resources are objects stored and managed through that API.
 
-All questions have their weight displayed.  
-Some questions may take significantly longer to solve than others, regardless of their weight. If you get stuck on a question, it is usually better to move on and come back to it later.  
-The questions in the exam can vary in difficulty, and you need to obtain at least 66% to pass.  
-It is therefore important to manage your time effectively.  
-You can answer the questions in any order you like.
+Kubernetes provides two ways to add custom resources:
 
-Read the instructions given before the start of the exam carefully, especially those explaining how to copy and paste content from the Kubernetes documentation into the shell (in the terminal, use Ctrl+Shift+C and Ctrl+Shift+V).  
-Before working on a question, always connect to the host (`ssh <host>`) or switch to the Kubernetes context specified in the question. Do not assume that the host or the context from the previous question is still the correct one.  
-At the end of a task, go back to the base host with `exit` (nested SSH sessions are not supported), and use `sudo -i` when you need to work as root. Always be aware of which node, user, directory and Kubernetes context you are currently working with.  
-On the hosts, `kubectl` is already configured with the `k` alias and Bash autocompletion, and tools like `yq`, `curl` and `wget` are available.  
-Proctors can be very strict about exam rules and the code of conduct.
+- CRDs, which are simple and can be created without any programming;
+- API aggregation, which requires programming (an additional API server, to which the main API server forwards the requests) but allows more control over the behavior of the API.
 
-Other suggestions for the exam:
+In this chapter we focus on CRDs.
 
-- become fast and confident with both imperative commands and declarative syntax;
-- use resources such as [CKAD-resources](https://github.com/lucassha/CKAD-resources) and [CKAD-exercises](https://github.com/dgkanatsios/CKAD-exercises) to practice extensively before the exam;
-- do not waste time writing manifests from scratch; use `kubectl create ... --dry-run=client -o yaml` whenever possible, then edit the generated manifest;
-- use `kubectl explain <resource>.<field>` to look up the fields of a resource directly from the terminal;
-- practice performing tasks under time pressure, not just solving them correctly;
-- if you are stuck on a question, move on and come back later; it is usually better to complete several easier questions than to spend too much time on a single difficult one;
-- always verify the result of your changes before moving on to the next question.
+#### Custom controllers
+
+A custom controller gives those objects a behavior by continuously reconciling their desired state with their actual state.
+
+```text
+    ┌──────────────────┐
+    │   Kubernetes     │
+    │    API Server    │
+    └────────┬─────────┘
+             │
+  ┌──────────┴──────────┐
+  ▼                     ▼
+etcd              Custom Controller
+                        │
+                        │ reconciliation
+                        ▼
+                  External system
+```
+
+Controllers are usually written in Go.  
+Here is an example of the [Deployment controller](https://github.com/kubernetes/kubernetes/blob/master/pkg/controller/deployment/deployment_controller.go).
+
+Once the CRD has been created, the Kubernetes API server exposes the new resource type and we can perform CRUD operations on its instances. Create and update requests are validated against the CRD's OpenAPI schema. Invalid objects are rejected by the API server.
+
+If we want the resource to actually have a behavior, we also need to take care of a **custom controller**.
+
+> [!TIP]
+>
+> A custom resource does not require a custom controller.  
+> A controller is needed when we want the custom resource to trigger some additional behavior or reconciliation logic.
+
+#### An example of custom resources, CRDs, and custom controllers
+
+For example, we can make a custom resource called `FlightTicket` whose controller watches the resource and, when its desired state changes, contacts an external API to perform the actual ticket booking actions.
+
+![CRD FlightTicket](./images/06-crd-FlightTicket.png "CRD FlightTicket")
+
+But in order to use a custom resource, we have to first **define** it.  
+For that, we need a `CustomResourceDefinition`
+
+```yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: flighttickets.flights.com # Must be <plural>.<group>
+spec:
+  scope: Namespaced # Either Namespaced or Cluster
+  group: flights.com # The API group used in the resource's apiVersion
+  names: # Names of the resource
+    plural: flighttickets # To be used in the URL: /apis/<group>/<version>/<plural>
+    singular: flightticket # To be used as an alias on the CLI and for display
+    kind: FlightTicket # Normally the CamelCased singular type. Your resource manifests use this
+    shortNames: # Allow shorter strings to match your resource on the CLI
+    - ft
+  versions: # List of versions supported by this CustomResourceDefinition
+    - name: v1
+      served: true # Each version can be enabled/disabled by this Served flag
+      storage: true # One and only one version must be marked as the storage version
+      schema: # Required: defines the fields (and the type of their values) that the resource can contain, usually under spec
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                from:
+                  type: string
+                to:
+                  type: string
+                number:
+                  type: integer
+                  minimum: 1 # We can also specify validation values like minimum and maximum
+                  maximum: 10
+              required:
+                - from
+                - to
+                - number
+```
+
+> [!NOTE]
+>
+> The scope field determines whether instances of the custom resource are namespaced or cluster-scoped.  
+> Custom Resource instances can be Namespaced or Cluster-scoped but **the CRD itself is always cluster-scoped**.
+
+The name of the CRD must be `<plural>.<group>`, otherwise the API server rejects it with an error like `metadata.name: Invalid value: "flightticket.flights.com": must be spec.names.plural+"."+spec.group`.
+
+We can now create the `CRD` with the usual command
+
+```console
+$ kubectl create -f flightticket-custom-definition.yaml
+customresourcedefinition.apiextensions.k8s.io/flighttickets.flights.com created
+```
+
+You can also get details of the created `CRD` with the following commands
+
+```bash
+kubectl explain flightticket
+kubectl explain flightticket.spec
+kubectl api-resources | grep flight
+kubectl api-resources --api-group=flights.com
+kubectl get crd
+```
+
+For example:
+
+```console
+$ kubectl api-resources --api-group=flights.com
+NAME            SHORTNAMES   APIVERSION       NAMESPACED   KIND
+flighttickets   ft           flights.com/v1   true         FlightTicket
+
+$ kubectl explain flightticket.spec
+GROUP:      flights.com
+KIND:       FlightTicket
+VERSION:    v1
+
+FIELD: spec <Object>
+
+
+DESCRIPTION:
+    <empty>
+FIELDS:
+  from  <string> -required-
+    <no description>
+
+  number        <integer> -required-
+    <no description>
+
+  to    <string> -required-
+    <no description>
+```
+
+and manage its resources
+
+```yaml
+apiVersion: flights.com/v1
+kind: FlightTicket
+metadata:
+  name: my-flight-ticket
+spec:
+  from: Mumbai
+  to: London
+  number: 2
+```
+
+```console
+$ kubectl create -f flightticket.yaml
+flightticket.flights.com/my-flight-ticket created
+
+$ kubectl get ft
+NAME               AGE
+my-flight-ticket   18s
+
+$ kubectl delete -f flightticket.yaml
+flightticket.flights.com "my-flight-ticket" deleted
+```
+
+Like for the built-in resources, `kubectl` accepts the plural (`flighttickets`), the singular (`flightticket`), the short names (`ft`), the kind (`FlightTicket`) and the fully qualified name (`flighttickets.flights.com`, useful when two API groups have resources with the same name).
+
+The API server validates each custom resource against the schema of the CRD. For example:
+
+```console
+$ kubectl create -f flightticket.yaml   # with number: 11
+The FlightTicket "my-flight-ticket" is invalid: spec.number: Invalid value: 11: spec.number in body should be less than or equal to 10
+
+$ kubectl create -f flightticket.yaml   # without the to field
+The FlightTicket "my-flight-ticket" is invalid: spec.to: Required value
+
+$ kubectl create -f flightticket.yaml   # with the unknown field seat: 12A
+Error from server (BadRequest): error when creating "flightticket.yaml": FlightTicket in version "v1" cannot be handled as a FlightTicket: strict decoding error: unknown field "spec.seat"
+```
+
+Unknown fields are rejected because `kubectl` validates strictly by default: with `--validate=warn` or `--validate=false`, the object is created and the unknown fields are removed (pruned) before it is stored in etcd.
+
+A custom resource cannot be created before its CRD. For example, when the CRD and the resource are created together, `kubectl` may fail with
+
+```text
+error: resource mapping not found for name: "my-flight-ticket" namespace: "" from "flightticket.yaml": no matches for kind "FlightTicket" in version "flights.com/v1"
+ensure CRDs are installed first
+```
+
+and, in this case, we can wait for the CRD to be ready with `kubectl wait --for=condition=Established crd/flighttickets.flights.com` before creating the resources.
+
+> [!CAUTION]
+>
+> Deleting a CRD also deletes all its custom resources, in all the namespaces.  
+> After that, `kubectl get ft` fails with `Unable to list "flights.com/v1, Resource=flighttickets": the server could not find the requested resource`, and if the CRD is created again, it starts empty.
+
+That solves the first part of our problem: being able to create and manage any kind of object type that we want on Kubernetes.  
+But this only allows us to create, manage and store these objects through the Kubernetes API (which then stores them in etcd). Without a controller, Kubernetes does not know what additional actions should be performed (for example, when a FlightTicket is created or modified).  
+The second part is building a controller that can watch when these resources are created and perform actions based on the resource's specification.
+
+```text
+User
+  │
+  │ create/update FlightTicket
+  ▼
+API Server
+  │
+  ├──────────────► etcd
+  │
+  │ watch
+  ▼
+Custom Controller
+  │
+  │ book the flight
+  ▼
+External API
+```
+
+> [!NOTE]
+>
+> The resource controller should not read from etcd directly.  
+> It reads objects through the Kubernetes API server (typically via client-go/controller-runtime), even though the object is physically stored in etcd.  
+> The API server is the abstraction layer through which Kubernetes resources are accessed.
+
+Now we need to monitor the status of the objects and perform the actions on the corresponding external services, through the custom controller.  
+A controller is any process or code that runs in a loop and continuously monitors the Kubernetes cluster, listening to events of specific objects being changed and performing the appropriate actions in response.
+
+> [!TIP]
+>
+> Controllers are commonly written in Go and can use Kubernetes libraries such as client-go and controller frameworks such as controller-runtime.  
+> They can also be written in other languages (there are official client libraries for Python, Java, JavaScript, C# and others), but without an equivalent of client-go's informers you don't get built-in caching and queuing: direct calls to the API can become expensive and you would need to build your own frameworks to manage them.
+
+The Kubernetes [sample-controller](https://github.com/kubernetes/sample-controller) repository provides an example of how a custom controller can be implemented.  
+In a real project, the controller would also require the appropriate API types, clients, RBAC configuration and deployment.  
+Here follows an example of `controller.go` with our custom logic.
+
+> [!NOTE]
+>
+> Controller development is beyond the CKAD scope. The following is included only to illustrate how a controller implements the reconciliation logic.
+
+```Go
+package flightticket
+
+var controllerKind =
+    flightsv1.SchemeGroupVersion.WithKind("FlightTicket")
+
+// < Code hidden >
+
+// Run begins watching and syncing.
+func (dc *FlightTicketController) Run(workers int,
+    stopCh <-chan struct{}) {
+    // ...
+}
+
+// < Code hidden >
+
+// Call BookFlightAPI
+func (dc *FlightTicketController) callBookFlightAPI(obj interface{}) {
+    // ...
+}
+
+// < A lot of code hidden >
+```
+
+We can then build our custom controller
+
+```console
+$ go build -o sample-controller .
+go: downloading k8s.io/client-go v0.0.0-20211001003700-dbfa30b9d908
+go: downloading golang.org/x/text v0.3.6
+```
+
+and run it specifying the `kubeconfig` file, which the controller can use to authenticate to the Kubernetes API.
+
+```console
+$ ./sample-controller -kubeconfig=$HOME/.kube/config
+I1013 02:11:07.489479 40117 controller.go:115] Setting up event handlers
+I1013 02:11:07.489701 40117 controller.go:156] Starting FlightTicket controller
+```
+
+Once the controller is ready, we can decide how to distribute it.  
+We don't want to build and run it each time; instead, we may package the controller in a container image, and then run it inside the cluster as a `Pod` or a `Deployment`.
+
+Inside the cluster, the controller does not need a kubeconfig file: it authenticates with the token of its `ServiceAccount`, which needs the permissions to read and update the custom resources. For example:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: flightticket-controller
+rules:
+- apiGroups: ["flights.com"]
+  resources: ["flighttickets"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+```
+
+bound to the `ServiceAccount` with `kubectl create clusterrolebinding flightticket-controller --clusterrole=flightticket-controller --serviceaccount=default:flightticket-controller`.  
+The same `ClusterRole` can be created with `kubectl create clusterrole flightticket-controller --verb=get,list,watch,update,patch --resource=flighttickets`: `kubectl` finds the API group (`flights.com`) by itself.
+
+> [!TIP]
+>
+> The custom resources are not included in the default `view`, `edit` and `admin` ClusterRoles.  
+> To add them, create a `ClusterRole` with the label `rbac.authorization.k8s.io/aggregate-to-view: "true"` (or `aggregate-to-edit`, `aggregate-to-admin`): its rules are automatically added to that role.
+>
+> ```yaml
+> apiVersion: rbac.authorization.k8s.io/v1
+> kind: ClusterRole
+> metadata:
+>   name: flightticket-view
+>   labels:
+>     rbac.authorization.k8s.io/aggregate-to-view: "true"
+> rules:
+> - apiGroups: ["flights.com"]
+>   resources: ["flighttickets"]
+>   verbs: ["get", "list", "watch"]
+> ```
+
+---
+
+### 11.2 Operators
+
+We've seen until now the **CRD** and the **Custom Controller**, which are two separate entities that are necessary to make use of **custom resources** with a behavior.  
+An **Operator** is a software application that extends Kubernetes with custom resources and controllers, combining them to automate the management of a specific application or system.
+
+```text
+Operator
+│
+├── CRDs
+│
+├── Controllers
+│
+└── Application-specific automation logic
+```
+
+An Operator usually installs the required `CRDs` and runs its controllers inside the cluster, often as a `Deployment`.  
+But an Operator can do much more than just deploying those two components: its controllers contain the knowledge needed to operate the application.  
+For example, one of the first operators was the etcd operator by CoreOS (archived in 2020 and no longer maintained), which provided the following CRDs, controllers and capabilities:
+
+| CRD         | custom controller  | capability                        |
+| ----------- | ------------------ | --------------------------------- |
+| EtcdCluster | Etcd controller    | deploy and manage an etcd cluster |
+| EtcdBackup  | Backup controller  | manage backups                    |
+| EtcdRestore | Restore controller | manage restore operations         |
+
+And you can manage the above operations by simply creating a custom resource.
+
+A widely used operator today is the Prometheus Operator, which manages Prometheus and its monitoring configuration through custom resources like `Prometheus`, `Alertmanager`, `ServiceMonitor` and `PrometheusRule`.
+
+Kubernetes operators typically do what a human operator would do to manage a specific application (installing it, maintaining it, taking backups and restoring them when needed).
+
+Many operators are available on [OperatorHub](https://operatorhub.io/), where you can find operators for many popular applications.
+
+> [!TIP]
+>
+> If there isn't an operator in the ecosystem that implements the desired behavior, it's possible to [create a customized one](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/#writing-operator).  
+> There are several libraries and tools that can be used to write a cloud native operator, like [Operator Framework](https://operatorframework.io/), [kubebuilder](https://book.kubebuilder.io/) and [Kopf](https://github.com/nolar/kopf) (Python).
+
+Useful commands to discover and use the resources added by CRDs and operators:
+
+- `kubectl get crd`: list the CRDs installed in the cluster;
+- `kubectl get crd <name> -o yaml` (or `kubectl describe crd <name>`): view the group, versions, scope, names and schema of a CRD;
+- `kubectl api-resources --api-group=<group>`: list the resources of an API group, with their short names, version, scope and kind;
+- `kubectl explain <kind>[.<field>] [--recursive]`: view the fields of a custom resource, as defined in the schema of its CRD;
+- `kubectl get <resource> [-A]`: list the custom resources (for example `kubectl get ft -A`);
+- `kubectl wait --for=condition=Established crd/<name>`: wait until a CRD is ready to be used.
 
 ---
